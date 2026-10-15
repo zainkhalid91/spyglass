@@ -5,6 +5,7 @@ import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.io.path.createTempDirectory
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -13,6 +14,11 @@ import kotlin.test.assertTrue
 
 class ImageDiffTest {
     private val dir = createTempDirectory("spyglass-diff").toFile()
+
+    @AfterTest
+    fun cleanUp() {
+        dir.deleteRecursively()
+    }
 
     /** A white image, optionally with filled rectangles (x, y, w, h) in the given colour. */
     private fun image(name: String, w: Int, h: Int, rects: List<IntArray> = emptyList(), color: Color = Color.RED): File {
