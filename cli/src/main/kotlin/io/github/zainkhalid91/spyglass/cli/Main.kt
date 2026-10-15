@@ -31,26 +31,52 @@ private val HELP = """
     |      --fail-under <0-1>   Exit with 1 if similarity is below this
     |      --json               Print a JSON result to stdout
     |
+    |  spyglass approve [--project, --module, --filter]
+    |                                            Store the current renders as baselines (.spyglass/baselines)
+    |  spyglass check [options]                  Compare every preview with its baseline (for CI)
+    |      --fail-under <0-1>   Similarity below this counts as changed (default 0.999)
+    |      --threshold <0-1>    Colour difference that counts as a changed pixel (default 0.1)
+    |      --strict             Also fail on previews with no baseline or that never rendered
+    |      --json               Print compact JSON to stdout
+    |
+    |  spyglass refs [--kind render|design] [--filter <text>]
+    |                                            List the project's UI memory (.spyglass/library)
+    |
     |  spyglass mcp [--project <dir>]            Run as an MCP server on stdio, for AI agents
-    |                                            (tools: render_previews, compare_with_design, diff_images)
+    |                                            (tools: render_previews, compare_with_design, diff_images, references)
     |      --project <dir>      Default project for tools (default: the server's working directory)
     |
+    |  spyglass telemetry [status|on|off|show|send]
+    |                                            Opt-in anonymous usage numbers (off unless you turn it on)
     |  spyglass version
 """.trimMargin()
 
 fun main(args: Array<String>) {
+    val command = args.firstOrNull()
     val code = try {
+        // Interactive commands may ask once about usage sharing; agents (mcp) and CI never are.
+        if (command in setOf("render", "diff", "check", "approve")) Telemetry.askOnce()
         run(args.toList())
     } catch (e: CliError) {
         System.err.println("spyglass: ${e.message}")
         2
     }
+    if (command != "mcp" && command != "telemetry") {
+        runCatching {
+            Telemetry.flush()
+            Telemetry.sendIfDue()
+        }
+    }
     exitProcess(code)
 }
 
 private fun run(args: List<String>): Int = when (args.firstOrNull()) {
-    "render" -> RenderCommand.run(args.drop(1))
-    "diff" -> DiffCommand.run(args.drop(1))
+    "render" -> RenderCommand.run(args.drop(1)).also { Telemetry.count("cli.render") }
+    "diff" -> DiffCommand.run(args.drop(1)).also { Telemetry.count("cli.diff") }
+    "approve" -> ApproveCommand.run(args.drop(1))
+    "check" -> CheckCommand.run(args.drop(1))
+    "refs" -> RefsCommand.run(args.drop(1))
+    "telemetry" -> TelemetryCommand.run(args.drop(1))
     "mcp" -> {
         val options = Args.parse(args.drop(1), options = setOf("--project"), switches = emptySet())
         options["--project"]?.let { McpTools.defaultProject = File(it).absoluteFile }

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.putJsonObject
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.PrintStream
+import kotlin.concurrent.thread
 
 /** A malformed request; answered with a JSON-RPC "invalid params" error. */
 internal class McpInvalidParams(message: String) : Exception(message)
@@ -49,6 +50,8 @@ internal object McpServer {
         // Only protocol messages may reach stdout; anything else printed is sent to stderr.
         val protocol = PrintStream(FileOutputStream(FileDescriptor.out), true, Charsets.UTF_8)
         System.setOut(System.err)
+        // Opt-in usage reports go out in the background, so they never delay a tool call.
+        thread(isDaemon = true, name = "spyglass-usage") { runCatching { Telemetry.sendIfDue() } }
         val input = System.`in`.bufferedReader(Charsets.UTF_8)
         while (true) {
             val line = input.readLine() ?: break

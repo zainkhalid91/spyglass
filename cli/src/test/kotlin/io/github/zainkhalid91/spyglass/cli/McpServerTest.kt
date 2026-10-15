@@ -8,7 +8,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
+import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -22,9 +24,20 @@ class McpServerTest {
     private fun JsonObject.errorCode() = getValue("error").jsonObject.getValue("code").jsonPrimitive.int
     private fun JsonObject.text() = result().getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content
 
+    private val realHome = Telemetry.home
+    private val home = createTempDirectory("spyglass-mcp-home").toFile()
+
+    @BeforeTest
+    fun isolate() {
+        Telemetry.home = home // tool calls flush usage counters; keep them away from the real home
+        McpTools.resetSession()
+    }
+
     @AfterTest
     fun resetProject() {
         McpTools.defaultProject = File(".")
+        Telemetry.home = realHome
+        home.deleteRecursively()
     }
 
     @Test
@@ -59,9 +72,31 @@ class McpServerTest {
     }
 
     @Test
-    fun `lists the three tools`() {
+    fun `lists the four tools`() {
         val tools = call("""{"jsonrpc":"2.0","id":6,"method":"tools/list"}""").result().getValue("tools").jsonArray
-        assertEquals(listOf("render_previews", "compare_with_design", "diff_images"), tools.map { it.jsonObject.getValue("name").jsonPrimitive.content })
+        assertEquals(
+            listOf("render_previews", "compare_with_design", "diff_images", "references"),
+            tools.map { it.jsonObject.getValue("name").jsonPrimitive.content },
+        )
+    }
+
+    @Test
+    fun `the references tool works on the library and rejects unknown actions`() {
+        val project = createTempDirectory("spyglass-mcp-project").toFile()
+        try {
+            McpTools.defaultProject = project
+            testImage(File(project, "mock.png"), 120, 80, listOf(intArrayOf(10, 10, 40, 40)))
+            val saved = call("""{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"references","arguments":{"action":"save","image":"mock.png","name":"login-mock","note":"from design"}}}""")
+            assertTrue(saved.text().startsWith("Saved: "))
+
+            val listed = call("""{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"references","arguments":{"action":"list"}}}""").text()
+            assertTrue("login-mock" in listed && "note: from design" in listed && "#FF0000" in listed)
+
+            val bad = call("""{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"references","arguments":{"action":"delete-everything"}}}""")
+            assertTrue(bad.result().getValue("isError").jsonPrimitive.boolean)
+        } finally {
+            project.deleteRecursively()
+        }
     }
 
     @Test

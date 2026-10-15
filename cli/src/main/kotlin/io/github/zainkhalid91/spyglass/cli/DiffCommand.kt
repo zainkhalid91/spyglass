@@ -33,6 +33,8 @@ internal object DiffCommand {
             ?: File(actual.parentFile, actual.nameWithoutExtension + ".diff.png")
 
         val result = ImageDiff.compare(actual, expected, threshold, heatmap)
+        Telemetry.similarity(result.similarity)
+        if (result.stretched) Telemetry.count("diff.stretched")
         if (args.has("--json")) {
             println(Json.encodeToString(JsonElement.serializer(), toJson(result, density)))
         } else {
