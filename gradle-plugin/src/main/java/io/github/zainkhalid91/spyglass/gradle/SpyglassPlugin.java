@@ -54,8 +54,15 @@ public final class SpyglassPlugin implements Plugin<Project> {
         tasks.register(RENDER_TASK, JavaExec.class, task -> {
             task.setGroup("spyglass");
             task.setDescription("Renders every @Preview composable to PNG, without an IDE.");
+            task.getMainClass().set(RENDERER_MAIN);
 
             String target = multiplatform ? findJvmTarget(project) : "";
+            if (target == null) {
+                // A build-wide `spyglassRender` must not fail because one module (say, Android-only) has nothing to render.
+                project.getLogger().lifecycle("spyglass: skipping {} (no JVM target; add jvm(\"desktop\") to render its previews)", project.getPath());
+                task.setEnabled(false);
+                return;
+            }
             String jarTaskName = target.isEmpty() ? "jar" : target + "Jar";
             String runtimeName = target.isEmpty() ? "runtimeClasspath" : target + RUNTIME_SUFFIX;
             TaskProvider<Jar> jar = tasks.named(jarTaskName, Jar.class);
@@ -64,7 +71,6 @@ public final class SpyglassPlugin implements Plugin<Project> {
 
             task.dependsOn(extract, jar);
             task.classpath(rendererJar, classesJar, project.getConfigurations().getByName(runtimeName));
-            task.getMainClass().set(RENDERER_MAIN);
             task.jvmArgs("-Djava.awt.headless=true");
 
             List<String> args = new ArrayList<>(List.of(
@@ -74,6 +80,7 @@ public final class SpyglassPlugin implements Plugin<Project> {
             addOption(project, args, "spyglass.density", "--density");
             addOption(project, args, "spyglass.maxWidthDp", "--max-width-dp");
             addOption(project, args, "spyglass.maxHeightDp", "--max-height-dp");
+            addOption(project, args, "spyglass.report", "--report");
             if (Boolean.parseBoolean(String.valueOf(project.findProperty("spyglass.failOnError")))) {
                 args.add("--fail-on-error");
             }
@@ -82,11 +89,11 @@ public final class SpyglassPlugin implements Plugin<Project> {
         });
     }
 
-    /** Picks the Kotlin Multiplatform JVM target, e.g. {@code desktop} for {@code jvm("desktop")}. */
+    /**
+     * Picks the Kotlin Multiplatform JVM target, e.g. {@code desktop} for {@code jvm("desktop")}, or
+     * returns null when the module has none. With several, prefers "desktop", then "jvm", then by name.
+     */
     private static String findJvmTarget(Project project) {
-        Object override = project.findProperty("spyglass.target");
-        if (override != null && !override.toString().isBlank()) return override.toString();
-
         List<String> candidates = new ArrayList<>();
         for (Configuration configuration : project.getConfigurations()) {
             String name = configuration.getName();
@@ -95,11 +102,22 @@ public final class SpyglassPlugin implements Plugin<Project> {
             if (prefix.isEmpty() || !isJvmPlatform(configuration.getAttributes())) continue;
             if (project.getTasks().getNames().contains(prefix + "Jar")) candidates.add(prefix);
         }
-        if (candidates.isEmpty()) {
-            throw new GradleException("Spyglass renders previews on the JVM, but " + project.getPath()
-                    + " has no JVM target. Add jvm(\"desktop\") to the kotlin { } block, or pass -Pspyglass.target=<name>.");
+
+        Object override = project.findProperty("spyglass.target");
+        if (override != null && !override.toString().isBlank()) {
+            String target = override.toString();
+            if (!candidates.contains(target)) {
+                throw new GradleException("spyglass.target=" + target + " is not a JVM target of " + project.getPath()
+                        + ". JVM targets found: " + (candidates.isEmpty() ? "none" : String.join(", ", candidates)) + ".");
+            }
+            return target;
         }
-        return candidates.get(0);
+        candidates.sort((a, b) -> rank(a) != rank(b) ? Integer.compare(rank(a), rank(b)) : a.compareTo(b));
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    private static int rank(String target) {
+        return target.equals("desktop") ? 0 : target.equals("jvm") ? 1 : 2;
     }
 
     private static boolean isJvmPlatform(AttributeContainer attributes) {

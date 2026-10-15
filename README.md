@@ -4,6 +4,14 @@
 
 Spyglass renders your Compose `@Preview` functions to PNG with no IDE, emulator or device, then compares them with a design image and tells you exactly where they differ. It works from the command line, in CI, and as an MCP server, so a coding agent can look at the UI it just wrote, compare it with the mock and fix the gaps on its own.
 
+<p align="center">
+  <img src="docs/media/spyglass-demo.gif" width="800" alt="Claude builds a card from a design. Without Spyglass four mistakes ship; with Spyglass it renders the preview, compares it with the design (89.81%), fixes the four regions, compares again (99.82%), fixes the last word and matches (100%).">
+</p>
+<p align="center">
+  <a href="docs/media/spyglass-demo.mp4"><b>▶ Watch with voice-over (MP4, 57 s)</b></a><br>
+  <sub>An illustration of the agent loop. Every render, heatmap and score in it is real Spyglass output from <code>samples/desktop-sample</code>.</sub>
+</p>
+
 <table>
   <tr>
     <th>Design target</th>
@@ -100,7 +108,7 @@ spyglass diff: 99.82% similar (1090 of 619200 px differ)
 
 That region is the word "Support": the fixed version says "Priority Support", the design says "Priority support". Small enough to miss by eye, obvious in the heatmap.
 
-Through MCP, an agent gets all of this from one `compare_with_design` call: the JSON summary plus the render, the design and the heatmap as images.
+Through MCP, an agent gets all of this from one `compare_with_design` call: a compact JSON summary plus a single image strip (render | design | heatmap), about 640 tokens in total.
 
 ---
 
@@ -121,12 +129,22 @@ Real output from the sample project, cropped to each preview's content:
     <td>Two <code>@Preview</code>s on one function, one with <code>fontScale = 1.5f</code></td>
     <td><code>widthDp</code> / <code>heightDp</code></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/gallery-light.png" width="200" alt="Light variant"> <img src="docs/images/gallery-dark.png" width="200" alt="Dark variant"></td>
+    <td colspan="2"><img src="docs/images/gallery-param-0.png" width="110" alt="Status chip: Online"> <img src="docs/images/gallery-param-1.png" width="100" alt="Status chip: Away"> <img src="docs/images/gallery-param-2.png" width="112" alt="Status chip: Offline"></td>
+  </tr>
+  <tr>
+    <td colspan="2"><code>@PreviewLightDark</code> from the Compose library: <code>isSystemInDarkTheme()</code> follows the preview's <code>uiMode</code></td>
+    <td colspan="2"><code>@PreviewParameter</code>: one image per value from the provider</td>
+  </tr>
 </table>
 
-A preview that throws doesn't stop the run. It is reported with its error and source line:
+Also supported: previews inside an `object` or class, `device = "spec:width=…dp,height=…dp"` sizes, `@PreviewFontScale`, `@PreviewScreenSizes`, and multi-preview annotations declared in another module, such as a shared design system.
+
+A preview that throws doesn't stop the run. It is reported with its error and the line in your code:
 
 ```text
-  error  BrokenKt.BrokenPreview  IllegalStateException: Intentional failure to test error reporting (at sample.BrokenKt.BrokenPreview:10)
+  error  BrokenKt.BrokenPreview  IllegalStateException: Intentional failure to test error reporting (at sample.BrokenKt.BrokenPreview(Broken.kt:10))
 ```
 
 ---
@@ -152,7 +170,7 @@ flowchart TB
 
 **1. No build changes.** The `spyglass` CLI carries the Gradle plugin inside it. When you run `spyglass render`, it starts your project's own `gradlew` with an init script (`-I spyglass.init.gradle`) that applies the plugin to every project for that run only. Nothing in your repository is edited, and your Gradle, Kotlin and Compose versions are the ones used.
 
-**2. A plugin that works anywhere.** The Gradle plugin is written in Java and deliberately avoids Kotlin Gradle Plugin classes, because an init script loads it in a separate class loader. It finds your Kotlin Multiplatform JVM target (`jvm()` or `jvm("desktop")`) by reading the `org.jetbrains.kotlin.platform.type` attribute on Gradle configurations, then registers `spyglassRender`. It works with the configuration cache on.
+**2. A plugin that works anywhere.** The Gradle plugin is written in Java and deliberately avoids Kotlin Gradle Plugin classes, because an init script loads it in a separate class loader. It finds your Kotlin Multiplatform JVM target (`jvm()` or `jvm("desktop")`) by reading the `org.jetbrains.kotlin.platform.type` attribute on Gradle configurations, then registers `spyglassRender`. Plain Kotlin/JVM modules work too. A module without a JVM target (Android-only, iOS-only, JS) is skipped with a message instead of failing the build. It works with the configuration cache on, and the per-build settings stay fixed so the cache is reused between runs.
 
 **3. Rendering on your classpath.** `spyglassRender` runs the renderer in a JVM whose classpath is your module's compiled desktop jar plus its runtime dependencies, so your composables, resources and Compose version are exactly what ship. The renderer itself compiles against Compose only as `compileOnly`.
 
@@ -160,18 +178,45 @@ flowchart TB
 - `androidx.compose.ui.tooling.preview.Preview` (the common annotation since Compose Multiplatform 1.10)
 - the deprecated JetBrains and desktop `@Preview`s
 - repeated `@Preview`s on one function
-- your own multi-preview annotations
+- multi-preview annotations, wherever they are declared. When a preview uses an annotation that isn't in the module, such as `@PreviewLightDark` or your design system's own, Spyglass runs a second, targeted scan of just those annotation classes on the runtime classpath.
+- `@PreviewParameter` on the preview's parameter: the provider is created and each of its values (up to its `limit`, at most 50) becomes its own image.
 
-**5. Calling a composable by reflection.** A parameterless `@Composable fun Foo()` compiles to a static method `Foo(Composer, int)`. Spyglass composes a host inside an offscreen `ImageComposeScene`, with `LocalInspectionMode` set to `true` as the IDE does, and invokes the preview method with the scene's current `Composer`. It renders two frames, so state set in the first frame's effects shows up, measures the content, and crops the PNG to it, or to `widthDp` / `heightDp` when set. `fontScale`, `showBackground` and `backgroundColor` are applied too. Compose's own error log is captured, so a crashing preview becomes one clean line instead of a stack trace.
+**5. Calling a composable by reflection.** A `@Composable fun Foo()` compiles to a method `Foo(Composer, int)`, or `Foo(value, Composer, int)` with a `@PreviewParameter`. Spyglass composes a host inside an offscreen `ImageComposeScene` and invokes the preview method with the scene's current `Composer`. Previews in a Kotlin `object` are called on its `INSTANCE`, and previews in a class on a new instance. During the render:
+- `LocalInspectionMode` is `true`, as in the IDE.
+- Compose desktop's system theme is pinned: light, or dark when `uiMode` asks for night. `isSystemInDarkTheme()` gives the same answer on every machine, and dark variants really render dark.
+- Two frames are rendered, so state set in the first frame's effects shows up.
+- The content is measured and the PNG is cropped to it. `widthDp` / `heightDp` or a `device = "spec:…"` size (exact with `showSystemUi`) fixes the canvas instead.
+- `fontScale`, `showBackground` and `backgroundColor` are applied.
+- Compose's own error log is captured, so a crashing preview becomes one line that points at your code (`Broken.kt:10`), not a stack trace.
 
-**6. A manifest for machines.** Every run writes `build/spyglass/previews/previews.json` with each preview's function, `@Preview` name, status, image path, size and error. `spyglass render --json` prints the same data, and the MCP server returns it with the images.
+**6. A manifest for machines.** Every run writes `build/spyglass/previews/previews.json` with each preview's function, `@Preview` name, parameter value, status, image path, size and error, and adds its path to a report file the CLI reads. `spyglass render --json` prints a compact version, with image paths relative to the project root:
+
+```json
+{"root":"/work/app","rendered":2,"failed":1,"previews":[{"preview":"CardsKt.WeatherCardPreview","image":"build/spyglass/previews/CardsKt.WeatherCardPreview.png","px":"480x341"},{"preview":"VariantsKt.StatusChipPreview (Online)","image":"build/spyglass/previews/VariantsKt.StatusChipPreview_0.png","px":"168x61"},{"preview":"BrokenKt.BrokenPreview","error":"IllegalStateException: … (at sample.BrokenKt.BrokenPreview(Broken.kt:10))"}]}
+```
 
 **7. Comparing images like a person would.** `spyglass diff` flattens both images onto white and scales the design to the render's size if they differ. It then compares every pixel with the YIQ colour distance used by [pixelmatch](https://github.com/mapbox/pixelmatch), so `--threshold 0.1` means what it does there. To turn changed pixels into something an agent can act on:
 - the image is split into a grid, and cells with only stray anti-aliasing changes are ignored
 - touching cells are joined into regions, and regions that nearly touch are merged, so "27°" is one region rather than two digits
-- each region is reported in px and dp with a rough position (`top-left`, `center`...) and the share of its pixels that changed
+- each region is reported with a rough position (`top-left`, `center`...) and the share of its pixels that changed. The human output gives px and dp; the JSON gives `[x, y, w, h]` in dp, the unit Compose code is written in.
+- if the design's aspect ratio differs from the render's by more than 2%, the result carries a warning, because stretching skews the comparison.
 
-**8. An MCP server that speaks old and new MCP.** `spyglass mcp` serves the stateless 2026-07-28 revision of the Model Context Protocol (version in each request's `_meta`, plus `server/discover`). It also answers the older `initialize` handshake (2024-11-05 to 2025-11-25), so it works with clients on either. Images are returned inline as base64 PNG. Problems the agent can fix, such as a compile error (with Gradle's last output lines), a crashing preview, or an ambiguous preview name (with the exact choices), come back as tool errors with the details.
+**8. An MCP server that speaks old and new MCP.** `spyglass mcp` serves the stateless 2026-07-28 revision of the Model Context Protocol (version in each request's `_meta`, plus `server/discover`). It also answers the older `initialize` handshake (2024-11-05 to 2025-11-25), so it works with clients on either. Problems the agent can fix come back as tool errors with the details:
+- a compile error, with the compiler's message, file and line
+- a crashing preview
+- an ambiguous preview name, with the exact choices
+
+**9. Built to be cheap in tokens.** An image costs an agent roughly width × height / 750 tokens, and every word of a tool schema is loaded into every session. So:
+- Tool descriptions are short.
+- Results are compact JSON with no empty fields.
+- Images are scaled to 640 px on the long side by default (`imageMaxPx` to change it).
+- A comparison comes back as one labelled strip instead of three full images.
+- Gradle's generic advice is trimmed from error output.
+
+| MCP call (sample project) | Before tuning | Now |
+|---|---|---|
+| `compare_with_design` on the plan card | ~2,900 tokens | ~640 tokens |
+| `render_previews` with three 720×860 previews | ~2,850 tokens | ~1,530 tokens |
 
 ---
 
@@ -202,15 +247,19 @@ Images land in `<module>/build/spyglass/previews/`. Render options: `--density` 
 
 ## Use with AI agents
 
-`spyglass mcp` is an MCP server with three tools:
+`spyglass mcp` is a standard MCP server on stdio, so any MCP client can use it. It has three tools:
 
 | Tool | What it does |
 |---|---|
-| `render_previews` | Renders previews (optionally filtered) and returns a JSON summary plus the images. |
-| `compare_with_design` | Renders one preview and compares it with a design image: score, regions, render, design and heatmap in one call. |
+| `render_previews` | Renders previews (optionally `filter`ed) and returns a compact summary plus the images. |
+| `compare_with_design` | Renders one preview and compares it with a design image: score, regions in dp, and one render \| design \| heatmap image. |
 | `diff_images` | Compares any two images. |
 
-**Claude Code:**
+The server renders the project it is started in. Every tool also accepts `projectDir` and `module`, and `imageMaxPx` for image size.
+
+In the examples below, replace the path with where you put Spyglass. On Windows, use `cmd` as the command with `["/c", "C:\\path\\to\\spyglass\\bin\\spyglass.bat", "mcp"]` as the arguments.
+
+**Claude Code** (CLI, IDE extensions and the desktop app's Code tab):
 
 ```bash
 claude mcp add --scope user spyglass -- /path/to/spyglass/bin/spyglass mcp
@@ -218,7 +267,19 @@ claude mcp add --scope user spyglass -- /path/to/spyglass/bin/spyglass mcp
 claude mcp add --scope user spyglass -- cmd /c C:\path\to\spyglass\bin\spyglass.bat mcp
 ```
 
-**Other clients** (`.mcp.json` or the client's settings):
+**Claude Desktop** (chat). In `claude_desktop_config.json` (Settings → Developer → Edit Config):
+
+```json
+{
+  "mcpServers": {
+    "spyglass": { "command": "/path/to/spyglass/bin/spyglass", "args": ["mcp", "--project", "/path/to/your/project"] }
+  }
+}
+```
+
+Claude Desktop doesn't start servers in your project folder, so `--project` sets the default. Tools can still pass `projectDir` to render another project.
+
+**Cursor** (`~/.cursor/mcp.json` or `.cursor/mcp.json`), **Windsurf** (`~/.codeium/windsurf/mcp_config.json`) and **Gemini CLI** (`~/.gemini/settings.json`):
 
 ```json
 {
@@ -228,9 +289,27 @@ claude mcp add --scope user spyglass -- cmd /c C:\path\to\spyglass\bin\spyglass.
 }
 ```
 
-The server renders the project it is started in. Every tool also accepts `projectDir` and `module`.
+**VS Code / GitHub Copilot** (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "spyglass": { "type": "stdio", "command": "/path/to/spyglass/bin/spyglass", "args": ["mcp"] }
+  }
+}
+```
+
+**OpenAI Codex CLI** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.spyglass]
+command = "/path/to/spyglass/bin/spyglass"
+args = ["mcp"]
+```
 
 **Claude Code skill:** copy [`skills/spyglass/`](skills/spyglass/SKILL.md) to `~/.claude/skills/`. It tells the agent when to render, how to work through a design comparison, and what the limits are. It falls back to the CLI when the MCP server isn't connected.
+
+The first render in a project compiles it, which can take a minute or two; later renders reuse Gradle's caches. If your client times out on the first call, render once from the terminal first.
 
 ## Use the Gradle plugin directly
 
@@ -244,15 +323,15 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 
 ## Limits
 
-- **Previews:** they must be parameterless and live in code compiled for a JVM (desktop) target. Previews that exist only in Android source sets, or use Android-only APIs, don't render yet.
-- **Not supported yet:** `@PreviewParameter`, dark mode (`uiMode`) and locales.
+- **Previews:** they must live in code compiled for a JVM (desktop) target. Previews that exist only in Android source sets, or use Android-only APIs, don't render yet.
+- **Not supported yet:** locales, `device = "id:…"` device names (`spec:` sizes work), and `@PreviewWrapper`.
 - **Fonts:** text uses the fonts available on the machine, so renders can differ slightly between operating systems. Compare renders made on the same OS, or use a looser `--threshold`.
 - **Scores against other tools' mocks:** a mock drawn in another tool will rarely score above 90%, because fonts and anti-aliasing differ. Use the regions and the heatmap, not just the number.
 
 ## Roadmap
 
 - Semantics tree output (text, sizes, touch targets) alongside each image
-- `@PreviewParameter`, dark mode, locales
+- Locales, `id:` device names, `@PreviewWrapper`
 - Android-only previews
 - Published Gradle plugin, CLI releases, and a Claude Code plugin bundle
 
@@ -264,7 +343,8 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 | [`gradle-plugin/`](gradle-plugin) | Java. Registers `spyglassRender` and ships the renderer inside its jar. |
 | [`cli/`](cli) | Kotlin. The `spyglass` command: runs your Gradle wrapper with the bundled plugin, reads manifests, diffs images, and serves MCP. |
 | [`skills/spyglass/`](skills/spyglass) | The Claude Code skill. |
-| [`samples/desktop-sample/`](samples/desktop-sample) | A Compose Multiplatform project used for testing and for every image in this README. |
+| [`samples/desktop-sample/`](samples/desktop-sample) | A Compose Multiplatform project used for testing and for every image and score in this README and the demo video. |
+| [`samples/edge-cases/`](samples/edge-cases) | A multi-module build covering cross-module multi-previews, `@PreviewParameter`, class previews, a `kotlin("jvm")` module and a module with no JVM target. |
 
 ## Windows note
 

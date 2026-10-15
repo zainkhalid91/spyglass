@@ -10,6 +10,7 @@ internal object Manifest {
                 add("function" to quote(r.spec.functionName))
                 add("name" to quote(r.spec.name))
                 add("group" to quote(r.spec.group))
+                add("parameter" to (r.parameter?.let(::quote) ?: "null"))
                 add("status" to quote(if (r.error == null) "ok" else "error"))
                 add("image" to (r.file?.let { quote(it.relativeTo(file.parentFile).invariantSeparatorsPath) } ?: "null"))
                 add("widthPx" to r.widthPx.toString())

@@ -32,6 +32,14 @@ internal class DiffResult(
     val regions: List<DiffRegion>,
 ) {
     val resized get() = expectedWidth != width || expectedHeight != height
+
+    /** True when the design had to be stretched (aspect ratios more than 2% apart), which skews the result. */
+    val stretched: Boolean
+        get() {
+            val actual = width.toDouble() / height
+            val expected = expectedWidth.toDouble() / expectedHeight
+            return kotlin.math.abs(actual - expected) / actual > 0.02
+        }
 }
 
 /**

@@ -1,5 +1,6 @@
 package io.github.zainkhalid91.spyglass.cli
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -15,61 +16,68 @@ import kotlinx.serialization.json.putJsonObject
 import java.io.File
 import java.util.Base64
 
-/** The tools the MCP server offers. Problems an agent can fix come back as `isError` results. */
+/**
+ * The tools the MCP server offers. Everything here is written to be cheap in tokens: short schemas
+ * (they are loaded into every session), compact JSON, and images scaled down before they are sent.
+ * Problems an agent can fix come back as `isError` results.
+ */
 internal object McpTools {
-    /** Images larger than this are referenced by path instead of sent inline. */
-    private const val MAX_INLINE_BYTES = 2_000_000
+    // 640 px keeps 14sp text legible on a phone-sized preview at about 450 tokens per image.
+    private const val DEFAULT_IMAGE_PX = 640
+    private const val DEFAULT_MAX_IMAGES = 6
+
+    /** The project tools render when a call doesn't pass `projectDir`; set by `spyglass mcp --project`. */
+    var defaultProject: File = File(".")
 
     private val projectProps = arrayOf(
-        "projectDir" to prop("string", "Gradle project or module directory. Defaults to the server's working directory."),
-        "module" to prop("string", "Gradle module path such as :shared. Defaults to the module containing projectDir, or every module."),
+        "projectDir" to prop("string", "Project or module dir. Default: the server's project."),
+        "module" to prop("string", "Gradle module, e.g. :shared. Default: inferred, or all."),
     )
+    private val imageProp = "imageMaxPx" to prop("integer", "Longest side of returned images. Default $DEFAULT_IMAGE_PX.")
+    private val thresholdProp = "threshold" to prop("number", "Colour difference (0-1) counted as a change. Default 0.1.")
 
     val definitions: JsonArray = buildJsonArray {
         add(
             tool(
                 name = "render_previews",
                 title = "Render Compose previews",
-                description = "Render the project's Compose @Preview functions to PNG (headless, no IDE) and return them. " +
-                    "Call after changing Compose UI code to see the result. Returns a JSON summary (function, status, " +
-                    "image path, size, error) followed by the images.",
+                description = "Render Compose @Preview functions to PNG without an IDE and return the images. " +
+                    "Use after changing UI code, with filter set to what you changed.",
                 required = emptyList(),
                 *projectProps,
-                "filter" to prop("string", "Only previews whose function name or @Preview name contains this text (case-insensitive)."),
-                "density" to prop("number", "Pixels per dp. Default 2."),
-                "includeImages" to prop("boolean", "Return the images inline. Default true."),
-                "maxImages" to prop("integer", "Most images to return inline. Default 6; the rest are listed by path."),
+                "filter" to prop("string", "Only previews whose function or @Preview name contains this."),
+                "includeImages" to prop("boolean", "Return images. Default true."),
+                "maxImages" to prop("integer", "Most images returned. Default $DEFAULT_MAX_IMAGES."),
+                imageProp,
             )
         )
         add(
             tool(
                 name = "compare_with_design",
                 title = "Compare a preview with a design",
-                description = "Render one @Preview and compare it with a design image (mock, screenshot or export). " +
-                    "Returns the similarity score, the regions that differ (px and dp, with a rough position), the render, " +
-                    "the design, and a heatmap with changed pixels in red. Use it in a loop: change the code, compare, " +
-                    "fix the largest regions, repeat.",
+                description = "Render one @Preview and compare it with a design image. Returns similarity, the regions " +
+                    "that differ as [x,y,w,h] dp, and one image: render | design | heatmap (changes in red). " +
+                    "Loop: fix the largest regions, compare again.",
                 required = listOf("preview", "designImage"),
-                "preview" to prop("string", "The preview's function name (e.g. LoginScreenPreview) or its @Preview name."),
-                "variant" to prop("string", "The @Preview name, when one function has several @Preview annotations."),
-                "designImage" to prop("string", "Path to the design image (PNG or JPEG)."),
+                "preview" to prop("string", "Preview function name or @Preview name."),
+                "variant" to prop("string", "@Preview name, if the function has several."),
+                "designImage" to prop("string", "Path to the design (PNG or JPEG)."),
                 *projectProps,
-                "threshold" to prop("number", "Colour difference (0-1) that counts as a changed pixel. Default 0.1."),
-                "density" to prop("number", "Pixels per dp. Default 2."),
+                thresholdProp,
+                imageProp,
             )
         )
         add(
             tool(
                 name = "diff_images",
                 title = "Compare two images",
-                description = "Compare two existing images and return the similarity score, the regions that differ, " +
-                    "and a heatmap with changed pixels in red.",
+                description = "Compare two images: similarity, regions that differ, and actual | expected | heatmap as one image.",
                 required = listOf("actual", "expected"),
-                "actual" to prop("string", "Path to the image being checked (e.g. a rendered preview)."),
-                "expected" to prop("string", "Path to the reference image. It is scaled to the actual image's size if they differ."),
-                "heatmap" to prop("string", "Where to write the heatmap. Default: next to actual, as <name>.diff.png."),
-                "threshold" to prop("number", "Colour difference (0-1) that counts as a changed pixel. Default 0.1."),
-                "density" to prop("number", "Pixels per dp, used to report regions in dp. Default 2."),
+                "actual" to prop("string", "Path to the image being checked."),
+                "expected" to prop("string", "Path to the reference; scaled to actual's size if needed."),
+                "density" to prop("number", "Pixels per dp for region sizes. Default 2."),
+                thresholdProp,
+                imageProp,
             )
         )
     }
@@ -90,23 +98,22 @@ internal object McpTools {
     }
 
     private fun renderPreviews(args: JsonObject): JsonObject {
+        val limit = args.int("maxImages") ?: DEFAULT_MAX_IMAGES
+        val maxPx = args.imageMaxPx()
         val outcome = render(args, filter = args.string("filter"))
         if (!outcome.succeeded) return toolError(gradleFailure(outcome))
 
-        val content = mutableListOf(text(prettyJson.encodeToString(JsonElement.serializer(), Rendering.toJson(outcome))))
+        val content = mutableListOf(text(compact(Rendering.toJson(outcome))))
         if (outcome.previews.isEmpty()) {
-            content += text("No @Preview functions were rendered. Check the filter, and that the module has a JVM (desktop) target.")
+            content += text("No previews rendered. Check the filter, and that the module has a JVM (desktop) target.")
         }
         if (args.bool("includeImages") != false) {
             val rendered = outcome.previews.filter { it.image != null }
-            val limit = args.int("maxImages") ?: 6
             for (p in rendered.take(limit)) {
                 content += text(Rendering.label(p))
-                content += imageOrPath(p.image!!)
+                content += image(Images.fit(p.image!!, maxPx))
             }
-            if (rendered.size > limit) {
-                content += text("${rendered.size - limit} more images are not shown; their paths are in the summary. Use `filter` to see them.")
-            }
+            if (rendered.size > limit) content += text("${rendered.size - limit} more not shown; narrow with filter.")
         }
         return result(content)
     }
@@ -116,29 +123,21 @@ internal object McpTools {
         val variant = args.string("variant")
         val design = File(args.requireString("designImage")).absoluteFile
         if (!design.isFile) throw CliError("designImage not found: $design")
+        val threshold = args.threshold()
+        val maxPx = args.imageMaxPx()
 
         val outcome = render(args, filter = query)
         if (!outcome.succeeded) return toolError(gradleFailure(outcome))
         val preview = pick(outcome.previews, query, variant)
-        val image = preview.image ?: return toolError("${Rendering.label(preview)} failed to render: ${preview.error}")
+        val render = preview.image ?: return toolError("${Rendering.label(preview)} failed to render: ${preview.error}")
 
-        val density = args.double("density") ?: preview.density
-        val heatmap = File(image.parentFile, image.nameWithoutExtension + ".vs-design.png")
-        val diff = ImageDiff.compare(image, design, args.threshold(), heatmap)
-        val summary = buildJsonObject {
-            put("preview", Rendering.label(preview))
-            put("function", preview.function)
-            for ((key, value) in DiffCommand.toJson(diff, image, design, density)) put(key, value)
-        }
+        val heatmap = File(render.parentFile, render.nameWithoutExtension + ".vs-design.png")
+        val diff = ImageDiff.compare(render, design, threshold, heatmap)
+        val summary = JsonObject(mapOf("preview" to JsonPrimitive(Rendering.label(preview))) + DiffCommand.toJson(diff, preview.density))
         return result(
             listOf(
-                text(prettyJson.encodeToString(JsonElement.serializer(), summary)),
-                text("Render (${DiffCommand.percent(diff.similarity)} similar to the design):"),
-                imageOrPath(image),
-                text("Design:"),
-                imageOrPath(design),
-                text("Heatmap, changed pixels in red:"),
-                imageOrPath(heatmap),
+                text(compact(summary)),
+                image(Images.strip(listOf("Render" to render, "Design" to design, "Diff" to heatmap), maxWidth = maxPx * 3 / 2, maxHeight = maxPx)),
             )
         )
     }
@@ -146,25 +145,23 @@ internal object McpTools {
     private fun diffImages(args: JsonObject): JsonObject {
         val actual = File(args.requireString("actual")).absoluteFile
         val expected = File(args.requireString("expected")).absoluteFile
-        val heatmap = args.string("heatmap")?.let { File(it).absoluteFile }
-            ?: File(actual.parentFile, actual.nameWithoutExtension + ".diff.png")
-        val diff = ImageDiff.compare(actual, expected, args.threshold(), heatmap)
-        val summary = DiffCommand.toJson(diff, actual, expected, args.double("density") ?: 2.0)
+        val threshold = args.threshold()
+        val density = args.double("density") ?: 2.0
+        if (density <= 0) throw CliError("'density' must be positive")
+        val maxPx = args.imageMaxPx()
+        val heatmap = File(actual.parentFile, actual.nameWithoutExtension + ".diff.png")
+        val diff = ImageDiff.compare(actual, expected, threshold, heatmap)
         return result(
             listOf(
-                text(prettyJson.encodeToString(JsonElement.serializer(), summary)),
-                text("Heatmap, changed pixels in red:"),
-                imageOrPath(heatmap),
+                text(compact(DiffCommand.toJson(diff, density))),
+                image(Images.strip(listOf("Actual" to actual, "Expected" to expected, "Diff" to heatmap), maxWidth = maxPx * 3 / 2, maxHeight = maxPx)),
             )
         )
     }
 
     private fun render(args: JsonObject, filter: String?): Rendering.Outcome {
-        val options = buildMap {
-            filter?.let { put("filter", it) }
-            args.double("density")?.let { put("density", it.toString()) }
-        }
-        val start = File(args.string("projectDir") ?: ".").canonicalFile
+        val options = buildMap { filter?.let { put("filter", it) } }
+        val start = (args.string("projectDir")?.let(::File) ?: defaultProject).absoluteFile.normalize()
         return Rendering.render(start, args.string("module"), options, quiet = true)
     }
 
@@ -183,22 +180,19 @@ internal object McpTools {
         throw CliError("'$query' matches several previews. Pass one of: $options")
     }
 
-    private fun gradleFailure(outcome: Rendering.Outcome) =
-        "Gradle failed (exit ${outcome.gradle.exitCode}) running ${outcome.task}. Last output:\n" +
-            outcome.gradle.lastLines.joinToString("\n")
+    /** Gradle's last lines hold the compile error the agent needs; its generic advice after "* Try:" does not. */
+    private fun gradleFailure(outcome: Rendering.Outcome): String {
+        val lines = outcome.gradle.lastLines.filter { it.isNotBlank() }
+        val useful = lines.takeWhile { !it.startsWith("* Try:") }.ifEmpty { lines }
+        return "Gradle failed (exit ${outcome.gradle.exitCode}) running ${outcome.task}:\n" + useful.takeLast(30).joinToString("\n")
+    }
 
-    private fun imageOrPath(file: File): JsonObject {
-        val mime = when (file.extension.lowercase()) {
-            "png" -> "image/png"
-            "jpg", "jpeg" -> "image/jpeg"
-            else -> null
-        }
-        if (mime == null || !file.isFile || file.length() > MAX_INLINE_BYTES) return text("(image not inlined: $file)")
-        return buildJsonObject {
-            put("type", "image")
-            put("data", Base64.getEncoder().encodeToString(file.readBytes()))
-            put("mimeType", mime)
-        }
+    private fun compact(json: JsonObject) = Json.encodeToString(JsonElement.serializer(), json)
+
+    private fun image(png: ByteArray) = buildJsonObject {
+        put("type", "image")
+        put("data", Base64.getEncoder().encodeToString(png))
+        put("mimeType", "image/png")
     }
 
     private fun result(content: List<JsonObject>, isError: Boolean = false) = buildJsonObject {
@@ -258,4 +252,7 @@ internal object McpTools {
 
     private fun JsonObject.threshold(): Double =
         (double("threshold") ?: 0.1).also { if (it !in 0.0..1.0) throw CliError("'threshold' must be between 0 and 1") }
+
+    private fun JsonObject.imageMaxPx(): Int =
+        (int("imageMaxPx") ?: DEFAULT_IMAGE_PX).also { if (it !in 64..4096) throw CliError("'imageMaxPx' must be between 64 and 4096") }
 }

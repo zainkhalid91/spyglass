@@ -38,11 +38,11 @@ internal object McpServer {
 
     private val capabilities = buildJsonObject { putJsonObject("tools") {} }
 
+    // Sent to the agent once per session, so it is kept short.
     private val instructions = """
-        Spyglass renders Compose @Preview functions to PNG without an IDE, so you can see the UI you write.
-        - After changing Compose UI code, call render_previews (use `filter` to render only what you touched) and look at the images before saying the UI is done.
-        - When the user gives a design image (mock, screenshot, export), call compare_with_design with the preview and the image path. Fix the largest regions first, then compare again. Pixel-exact targets can reach 0.98+; mocks drawn in other tools rarely pass 0.9, so judge the images too, not just the score.
-        - Previews must be parameterless @Composable functions annotated with @Preview, in a module with a JVM (desktop) target. A failed render or Gradle error is returned as text: fix the code and try again.
+        Spyglass shows you Compose UI. After editing UI code, call render_previews with filter and look at the result before calling it done.
+        Given a design image, loop compare_with_design: fix the largest regions first. Pixel-exact targets reach 0.98+; mocks from other tools rarely pass 0.9, so judge the image too.
+        Previews need @Preview on a @Composable in a module with a JVM (desktop) target. Errors come back as text: fix and retry.
     """.trimIndent()
 
     fun run(): Int {

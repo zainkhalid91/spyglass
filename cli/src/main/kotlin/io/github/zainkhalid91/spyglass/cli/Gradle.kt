@@ -6,11 +6,30 @@ import java.util.zip.CRC32
 /** Where a Gradle build lives and how to launch its wrapper. */
 internal class GradleBuild(val settingsDir: File, private val wrapperDir: File) {
 
-    fun command(arguments: List<String>): List<String> {
-        // Launched from the wrapper's directory by a relative path: cmd.exe mangles a quoted first
-        // token, and with NoDefaultCurrentDirectoryInExePath set it won't find a bare "gradlew.bat".
-        val launcher = if (isWindows) listOf("cmd.exe", "/c", ".\\gradlew.bat") else listOf("sh", "./gradlew")
-        return launcher + listOf("-p", settingsDir.path) + arguments
+    /**
+     * Starts the wrapper the way `gradlew` itself does (java + gradle-wrapper.jar), so no shell is
+     * involved: paths containing `&`, `^` or spaces can't be misread by cmd.exe. Falls back to the
+     * script when the wrapper jar is missing.
+     */
+    private fun command(arguments: List<String>, tmpDir: File?): List<String> {
+        val wrapperJar = File(wrapperDir, "gradle/wrapper/gradle-wrapper.jar")
+        if (!wrapperJar.isFile) {
+            val script = if (isWindows) listOf("cmd.exe", "/c", ".\\gradlew.bat") else listOf("sh", "./gradlew")
+            return script + listOf("-p", settingsDir.path) + arguments
+        }
+        val java = File(System.getProperty("java.home"), if (isWindows) "bin/java.exe" else "bin/java").path
+        return buildList {
+            add(java)
+            addAll(listOf("-Xmx64m", "-Xms64m")) // gradlew's DEFAULT_JVM_OPTS
+            listOf("JAVA_OPTS", "GRADLE_OPTS").forEach { name ->
+                System.getenv(name)?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() }?.let(::addAll)
+            }
+            tmpDir?.let { add("-Djdk.net.unixdomain.tmpdir=${it.path}") }
+            add("-Dorg.gradle.appname=gradlew")
+            addAll(listOf("-classpath", wrapperJar.path, "org.gradle.wrapper.GradleWrapperMain"))
+            addAll(listOf("-p", settingsDir.path))
+            addAll(arguments)
+        }
     }
 
     class Result(val exitCode: Int, val lastLines: List<String>)
@@ -20,10 +39,11 @@ internal class GradleBuild(val settingsDir: File, private val wrapperDir: File) 
      * Keeps the last lines so a failure (say, a compile error) can be shown to an agent.
      */
     fun run(arguments: List<String>): Result {
-        val process = ProcessBuilder(command(arguments))
+        val tmpDir = windowsTempDir()
+        val process = ProcessBuilder(command(arguments, tmpDir))
             .directory(wrapperDir)
             .redirectErrorStream(true)
-            .apply { environment().putAll(windowsTempFix()) }
+            .apply { tmpDir?.let { environment()["TEMP"] = it.path; environment()["TMP"] = it.path } }
             .start()
         val tail = ArrayDeque<String>()
         process.inputStream.bufferedReader().forEachLine { line ->
@@ -35,20 +55,22 @@ internal class GradleBuild(val settingsDir: File, private val wrapperDir: File) 
     }
 
     /**
-     * On Windows, a TEMP that is an 8.3 short path (C:\Users\USERNA~1\...) breaks the Unix-domain
-     * sockets Gradle uses ("Unable to establish loopback connection"). Point it somewhere safe.
+     * On Windows, a TEMP that is an 8.3 short path (C:\Users\JOHNSM~1\...) breaks the Unix-domain
+     * sockets Gradle uses ("Unable to establish loopback connection"). Returns a safe directory to use
+     * instead, or null when TEMP is fine. Space-free paths are preferred, as some tools split on spaces.
      */
-    private fun windowsTempFix(): Map<String, String> {
-        if (!isWindows) return emptyMap()
-        val temp = System.getenv("TEMP") ?: return emptyMap()
-        if ('~' !in temp) return emptyMap()
-        // GRADLE_OPTS is split on spaces by gradlew.bat, so the directory must not contain any.
-        val dir = listOf(File(settingsDir, ".gradle/spyglass-tmp"), File(File(temp).canonicalPath))
-            .firstOrNull { ' ' !in it.path && '~' !in it.path }
-            ?: return emptyMap()
+    private fun windowsTempDir(): File? {
+        if (!isWindows) return null
+        val temp = System.getenv("TEMP") ?: return null
+        if ('~' !in temp) return null
+        val candidates = listOfNotNull(
+            File(settingsDir, ".gradle/spyglass-tmp"),
+            System.getenv("PUBLIC")?.let { File(it, "spyglass-tmp") }, // C:\Users\Public, writable by every user
+            File(File(temp).canonicalPath),
+        ).filter { '~' !in it.path }
+        val dir = candidates.firstOrNull { ' ' !in it.path } ?: candidates.firstOrNull() ?: return null
         dir.mkdirs()
-        val opts = listOfNotNull(System.getenv("GRADLE_OPTS"), "-Djdk.net.unixdomain.tmpdir=${dir.path}")
-        return mapOf("TEMP" to dir.path, "TMP" to dir.path, "GRADLE_OPTS" to opts.joinToString(" "))
+        return dir
     }
 
     companion object {
@@ -62,8 +84,8 @@ internal class GradleBuild(val settingsDir: File, private val wrapperDir: File) 
                 ?: throw CliError("no Gradle build (settings.gradle[.kts]) found in $start or its parents")
             val wrapperName = if (isWindows) "gradlew.bat" else "gradlew"
             val wrapperDir = generateSequence(settingsDir) { it.parentFile }
-                .firstOrNull { File(it, wrapperName).isFile }
-                ?: throw CliError("no Gradle wrapper ($wrapperName) found in $settingsDir or its parents")
+                .firstOrNull { File(it, "gradle/wrapper/gradle-wrapper.jar").isFile || File(it, wrapperName).isFile }
+                ?: throw CliError("no Gradle wrapper found in $settingsDir or its parents")
             return GradleBuild(settingsDir, wrapperDir)
         }
     }

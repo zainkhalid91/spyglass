@@ -1,5 +1,6 @@
 package io.github.zainkhalid91.spyglass.cli
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import java.io.File
 
@@ -33,7 +34,7 @@ internal object RenderCommand {
         }
 
         if (json) {
-            println(prettyJson.encodeToString(JsonElement.serializer(), Rendering.toJson(outcome)))
+            println(Json.encodeToString(JsonElement.serializer(), Rendering.toJson(outcome)))
         } else {
             printHuman(outcome)
         }

@@ -1,12 +1,14 @@
 package io.github.zainkhalid91.spyglass.cli
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.putJsonObject
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -26,11 +28,16 @@ internal object DiffCommand {
         val threshold = args.double("--threshold") ?: 0.1
         if (threshold !in 0.0..1.0) throw CliError("--threshold must be between 0 and 1")
         val density = args.double("--density") ?: 2.0
+        if (density <= 0) throw CliError("--density must be a positive number")
         val heatmap = args["--out"]?.let { File(it).absoluteFile }
             ?: File(actual.parentFile, actual.nameWithoutExtension + ".diff.png")
 
         val result = ImageDiff.compare(actual, expected, threshold, heatmap)
-        if (args.has("--json")) printJson(result, actual, expected, density) else printHuman(result, density)
+        if (args.has("--json")) {
+            println(Json.encodeToString(JsonElement.serializer(), toJson(result, density)))
+        } else {
+            printHuman(result, density)
+        }
 
         val failUnder = args.double("--fail-under")
         return if (failUnder != null && result.similarity < failUnder) 1 else 0
@@ -39,6 +46,7 @@ internal object DiffCommand {
     private fun printHuman(r: DiffResult, density: Double) {
         println("spyglass diff: ${percent(r.similarity)} similar (${r.diffPixels} of ${r.width * r.height} px differ)")
         if (r.resized) println("  expected image was ${r.expectedWidth}x${r.expectedHeight}, scaled to ${r.width}x${r.height} to compare")
+        if (r.stretched) println("  warning: ${STRETCHED}")
         println("  heatmap: ${r.heatmap}")
         if (r.regions.isEmpty()) {
             println("  no regions differ")
@@ -54,40 +62,33 @@ internal object DiffCommand {
         }
     }
 
-    private fun printJson(r: DiffResult, actual: File, expected: File, density: Double) {
-        println(prettyJson.encodeToString(JsonElement.serializer(), toJson(r, actual, expected, density)))
-    }
+    private const val STRETCHED =
+        "the design's aspect ratio differs from the render's, so it was stretched to compare. Export it at the preview's size for a fair result."
 
-    fun toJson(r: DiffResult, actual: File, expected: File, density: Double): JsonObject =
+    /**
+     * Compact on purpose, as agents read it: regions are `[x, y, width, height]` in dp, the unit
+     * Compose code is written in, and `changed` is the share of each region's pixels that differ.
+     */
+    fun toJson(r: DiffResult, density: Double): JsonObject =
         buildJsonObject {
             put("similarity", round4(r.similarity))
-            put("diffPixels", r.diffPixels)
-            put("totalPixels", r.width * r.height)
-            putJsonObject("actual") {
-                put("path", actual.path)
-                put("width", r.width)
-                put("height", r.height)
-            }
-            putJsonObject("expected") {
-                put("path", expected.path)
-                put("width", r.expectedWidth)
-                put("height", r.expectedHeight)
-                put("scaledToActual", r.resized)
-            }
+            put("changedPx", r.diffPixels)
+            put("size", "${r.width}x${r.height}")
+            if (r.resized) put("designScaledFrom", "${r.expectedWidth}x${r.expectedHeight}")
+            if (r.stretched) put("warning", STRETCHED)
             put("heatmap", r.heatmap.path)
             put("density", density)
             putJsonArray("regions") {
                 for (g in r.regions) addJsonObject {
-                    put("where", g.where)
-                    put("x", g.x); put("y", g.y); put("width", g.width); put("height", g.height)
-                    put("xDp", dp(g.x, density)); put("yDp", dp(g.y, density))
-                    put("widthDp", dp(g.width, density)); put("heightDp", dp(g.height, density))
-                    put("mismatch", round4(g.mismatch))
+                    put("at", g.where)
+                    put("dp", JsonArray(listOf(g.x, g.y, g.width, g.height).map { JsonPrimitive(dp(it, density)) }))
+                    put("changed", round2(g.mismatch))
                 }
             }
         }
 
     private fun dp(px: Int, density: Double) = (px / density).roundToInt()
     private fun round4(v: Double) = (v * 10_000).roundToInt() / 10_000.0
+    private fun round2(v: Double) = (v * 100).roundToInt() / 100.0
     fun percent(v: Double): String = String.format(Locale.ROOT, "%.2f%%", v * 100)
 }
