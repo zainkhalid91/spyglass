@@ -24,6 +24,15 @@ dependencies {
     implementation(libs.kotlin.stdlib)
     implementation(libs.kotlinx.serialization.json)
     gradlePluginJar(project(":gradle-plugin"))
+
+    testImplementation(libs.kotlin.test.junit5)
+    testImplementation(platform(libs.junit.bom))
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.test {
+    useJUnitPlatform()
+    systemProperty("java.awt.headless", "true")
 }
 
 // The CLI carries the Gradle plugin (which carries the renderer), so one install is all a user needs.

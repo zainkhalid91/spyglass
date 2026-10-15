@@ -22,6 +22,16 @@ dependencies {
     compileOnly(libs.compose.ui)
 
     implementation(libs.classgraph)
+
+    // The Compose compiler plugin refuses to compile any source set without the runtime present.
+    testCompileOnly(libs.compose.runtime)
+    testImplementation(libs.kotlin.test.junit5)
+    testImplementation(platform(libs.junit.bom))
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 // A single jar holding the renderer plus ClassGraph, embedded inside the Gradle plugin.

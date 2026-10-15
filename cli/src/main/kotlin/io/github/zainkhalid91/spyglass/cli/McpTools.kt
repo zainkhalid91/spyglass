@@ -121,7 +121,7 @@ internal object McpTools {
     private fun compareWithDesign(args: JsonObject): JsonObject {
         val query = args.requireString("preview")
         val variant = args.string("variant")
-        val design = File(args.requireString("designImage")).absoluteFile
+        val design = path(args.requireString("designImage"))
         if (!design.isFile) throw CliError("designImage not found: $design")
         val threshold = args.threshold()
         val maxPx = args.imageMaxPx()
@@ -143,8 +143,8 @@ internal object McpTools {
     }
 
     private fun diffImages(args: JsonObject): JsonObject {
-        val actual = File(args.requireString("actual")).absoluteFile
-        val expected = File(args.requireString("expected")).absoluteFile
+        val actual = path(args.requireString("actual"))
+        val expected = path(args.requireString("expected"))
         val threshold = args.threshold()
         val density = args.double("density") ?: 2.0
         if (density <= 0) throw CliError("'density' must be positive")
@@ -161,8 +161,17 @@ internal object McpTools {
 
     private fun render(args: JsonObject, filter: String?): Rendering.Outcome {
         val options = buildMap { filter?.let { put("filter", it) } }
-        val start = (args.string("projectDir")?.let(::File) ?: defaultProject).absoluteFile.normalize()
+        val start = args.string("projectDir")?.let(::path) ?: defaultProject.absoluteFile.normalize()
         return Rendering.render(start, args.string("module"), options, quiet = true)
+    }
+
+    /**
+     * A path from a tool call. Relative paths are taken from the server's project, not its working
+     * directory, which for clients like Claude Desktop is unrelated to the project.
+     */
+    internal fun path(value: String): File {
+        val file = File(value)
+        return (if (file.isAbsolute) file else File(defaultProject, value)).absoluteFile.normalize()
     }
 
     /** One preview from a filtered render: an exact function or @Preview name match wins over a partial one. */

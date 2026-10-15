@@ -232,6 +232,16 @@ cd spyglass
 
 The launcher is `cli/build/install/spyglass/bin/spyglass` (`spyglass.bat` on Windows). Copy the `cli/build/install/spyglass` folder somewhere stable and add its `bin` to your `PATH`. Requires JDK 17+.
 
+### Compatibility
+
+| | Tested with | Notes |
+|---|---|---|
+| Compose Multiplatform | 1.12.1 | The common `@Preview` annotation needs 1.10 or later. |
+| Kotlin | 2.4.20 | |
+| Gradle | 9.7.1 | Configuration cache on or off. |
+| JDK | 21 | Built for 17+. |
+| OS | Windows 11 | macOS and Linux aren't tested yet. Please open an issue if something breaks there. |
+
 ## Use
 
 ```bash
@@ -345,6 +355,15 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 | [`skills/spyglass/`](skills/spyglass) | The Claude Code skill. |
 | [`samples/desktop-sample/`](samples/desktop-sample) | A Compose Multiplatform project used for testing and for every image and score in this README and the demo video. |
 | [`samples/edge-cases/`](samples/edge-cases) | A multi-module build covering cross-module multi-previews, `@PreviewParameter`, class previews, a `kotlin("jvm")` module and a module with no JVM target. |
+
+## Development
+
+```bash
+./gradlew test                                   # unit tests: device specs, image diff, MCP protocol, arguments
+./gradlew :cli:installDist                       # build the CLI
+cli/build/install/spyglass/bin/spyglass render --project samples/desktop-sample   # end to end
+cli/build/install/spyglass/bin/spyglass render --project samples/edge-cases
+```
 
 ## Windows note
 
