@@ -1,0 +1,13 @@
+// Applies Spyglass to every project in a build without changing that build's files:
+//   gradlew -I spyglass.init.gradle -Dspyglass.pluginJar=<path to the plugin jar> spyglassRender
+initscript {
+    def jar = System.getProperty('spyglass.pluginJar')
+    if (jar == null || !new File(jar).isFile()) {
+        throw new GradleException("Spyglass: pass -Dspyglass.pluginJar=<path to the Spyglass Gradle plugin jar> (got: $jar)")
+    }
+    dependencies { classpath files(jar) }
+}
+
+allprojects {
+    apply plugin: io.github.zainkhalid91.spyglass.gradle.SpyglassPlugin
+}
