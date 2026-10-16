@@ -197,7 +197,7 @@ internal object PreviewRenderer {
                 }
                 writePng(it.image, it.measured.width, it.measured.height, output)
                 if (it.stillAnimating) {
-                    notes += "Still animating after ${SETTLE_LIMIT_NANOS / 1_000_000_000}s (an endless animation or loop); this is one moment of it."
+                    notes += "Still animating after ${SETTLE_LIMIT_NANOS / 1_000_000_000}s (a spinner, a blinking text cursor or another endless animation); the image is one moment of it."
                 }
                 RenderResult(
                     spec, output, it.measured.width, it.measured.height, elapsedMs(), error = null,

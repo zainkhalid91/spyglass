@@ -400,7 +400,7 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 | [`cli/`](cli) | Kotlin. The `spyglass` command: runs your Gradle wrapper with the bundled plugin, reads manifests, diffs images, and serves MCP. |
 | [`skills/spyglass/`](skills/spyglass) | The Claude Code skill. |
 | [`samples/desktop-sample/`](samples/desktop-sample) | A Compose Multiplatform project used for testing and for every image and score in this README and the demo video. |
-| [`samples/new-uis/`](samples/new-uis) | Harder UIs: animations, delayed loading, spinners, dialogs, menus, a Scaffold with a lazy list, Urdu right-to-left text, long and full-screen content, and a preview stuck in a loop. |
+| [`samples/new-uis/`](samples/new-uis) | Harder UIs: animations, delayed loading, spinners, dialogs, menus, Urdu right-to-left text, long and full-screen content and a preview stuck in a loop, plus complex screens: an admin dashboard with charts and a table, a shop home with pager, grid and bottom navigation, chat, a settings form, an open bottom sheet and drawer, scrolled lists, blur and 3D effects, flow-driven state, a popup, a calendar and a staggered grid. |
 | [`samples/edge-cases/`](samples/edge-cases) | A multi-module build covering cross-module multi-previews, `@PreviewParameter`, class previews, a `kotlin("jvm")` module and a module with no JVM target. |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Continuous testing; see below. |
 
