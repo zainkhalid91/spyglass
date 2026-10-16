@@ -20,6 +20,7 @@ private val HELP = """
     |      --max-width-dp <n>   Canvas limit for previews without widthDp (default 1024)
     |      --max-height-dp <n>  Canvas limit for previews without heightDp (default 1024)
     |      --target <name>      Kotlin Multiplatform JVM target (default: detected)
+    |      --timeout <seconds>  Time one preview may take before it counts as stuck (default 30)
     |      --fail-on-error      Exit with 1 if any preview fails
     |      --json               Print compact JSON to stdout (Gradle output goes to stderr)
     |

@@ -17,6 +17,7 @@ internal object Manifest {
                 add("heightPx" to r.heightPx.toString())
                 add("durationMs" to r.durationMs.toString())
                 add("error" to (r.error?.let(::quote) ?: "null"))
+                add("warning" to (r.warning?.let(::quote) ?: "null"))
             }
             fields.joinToString(",\n", prefix = "    {\n", postfix = "\n    }") { (k, v) -> "      \"$k\": $v" }
         }

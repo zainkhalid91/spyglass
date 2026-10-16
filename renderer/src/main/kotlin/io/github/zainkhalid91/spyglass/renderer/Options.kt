@@ -13,6 +13,8 @@ internal data class Options(
     val failOnError: Boolean,
     /** A file the renderer appends its manifest path to, so callers find it without searching. */
     val report: File?,
+    /** Seconds one preview may take before it is reported as stuck. */
+    val timeoutSec: Int = 30,
 ) {
     companion object {
         fun parse(args: Array<String>): Options {
@@ -24,6 +26,7 @@ internal data class Options(
             var filter: String? = null
             var failOnError = false
             var report: File? = null
+            var timeoutSec = 30
 
             var i = 0
             fun value(): String = args.getOrNull(++i) ?: usage("Missing value for ${args[i - 1]}")
@@ -38,6 +41,7 @@ internal data class Options(
                     "--max-height-dp" -> maxHeightDp = positive(arg, value()).toInt()
                     "--filter" -> filter = value().ifBlank { null }
                     "--report" -> report = File(value())
+                "--timeout" -> timeoutSec = positive(arg, value()).toInt().coerceAtLeast(1)
                     "--fail-on-error" -> failOnError = true
                     else -> usage("Unknown argument: $arg")
                 }
@@ -54,6 +58,7 @@ internal data class Options(
                 filter = filter,
                 failOnError = failOnError,
                 report = report,
+                timeoutSec = timeoutSec,
             )
         }
 
@@ -61,7 +66,7 @@ internal data class Options(
             System.err.println("spyglass: $problem")
             System.err.println(
                 "usage: --scan <path> [--scan <path>...] --out <dir> [--density 2] [--max-width-dp 1024] " +
-                    "[--max-height-dp 1024] [--filter <text>] [--report <file>] [--fail-on-error]"
+                    "[--max-height-dp 1024] [--filter <text>] [--report <file>] [--timeout 30] [--fail-on-error]"
             )
             exitProcess(2)
         }

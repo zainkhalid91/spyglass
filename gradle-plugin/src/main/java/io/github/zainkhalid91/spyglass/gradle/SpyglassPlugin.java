@@ -81,6 +81,7 @@ public final class SpyglassPlugin implements Plugin<Project> {
             addOption(project, args, "spyglass.maxWidthDp", "--max-width-dp");
             addOption(project, args, "spyglass.maxHeightDp", "--max-height-dp");
             addOption(project, args, "spyglass.report", "--report");
+            addOption(project, args, "spyglass.timeout", "--timeout");
             if (Boolean.parseBoolean(String.valueOf(project.findProperty("spyglass.failOnError")))) {
                 args.add("--fail-on-error");
             }

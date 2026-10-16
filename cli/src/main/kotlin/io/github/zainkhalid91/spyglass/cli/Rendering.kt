@@ -16,8 +16,9 @@ internal object Rendering {
         "maxWidthDp" to "spyglass.maxWidthDp",
         "maxHeightDp" to "spyglass.maxHeightDp",
         "target" to "spyglass.target",
+        "timeout" to "spyglass.timeout",
     )
-    private val numericOptions = setOf("density", "maxWidthDp", "maxHeightDp")
+    private val numericOptions = setOf("density", "maxWidthDp", "maxHeightDp", "timeout")
 
     class Outcome(
         val task: String,
@@ -133,6 +134,7 @@ internal object Rendering {
                     }
                 }
                 p.error?.let { put("error", it) }
+                p.warning?.let { put("warning", it) }
             }
         }
     }

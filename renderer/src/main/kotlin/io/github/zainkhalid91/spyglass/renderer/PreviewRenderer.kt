@@ -40,6 +40,8 @@ internal class RenderResult(
     val error: String?,
     /** The `@PreviewParameter` value this image shows, as text. */
     val parameter: String? = null,
+    /** Something to know about an image that did render, such as content cut off at the size limit. */
+    val warning: String? = null,
 )
 
 /** One image to render: a preview and, for a `@PreviewParameter` preview, the value to pass in. */
@@ -54,8 +56,16 @@ internal class PreviewProblem(message: String) : Exception(message)
 private class Target(val method: Method, val receiver: Any?)
 
 internal object PreviewRenderer {
-    // Two frames: the first composes, the second picks up state set by effects in the first.
-    private const val SECOND_FRAME_NANOS = 16_000_000L
+    // Frames advance a virtual clock until nothing animates or waits on delay(), so animations,
+    // AnimatedVisibility, dialogs fading in and fake loading delays are shown finished. Animations
+    // that never end (spinners) are captured at SETTLE_LIMIT_NANOS.
+    internal const val FRAME_NANOS = 32_000_000L
+    internal const val SETTLE_LIMIT_NANOS = 2_000_000_000L
+
+    // Content reaching the size limit is drawn once more on a canvas this many times bigger, within
+    // the pixel limit the CLI accepts for images.
+    private const val GROW = 4
+    private const val MAX_PIXELS = 40_000_000L
 
     // Providers can yield endless sequences; Android Studio caps what it shows too.
     private const val MAX_PARAMETER_VALUES = 50
@@ -92,12 +102,44 @@ internal object PreviewRenderer {
         val log = ByteArrayOutputStream()
         System.setErr(PrintStream(log, true))
         val result = try {
-            renderCaptured(job, options, output)
+            withTimeout(job, options) { renderCaptured(job, options, output) }
         } finally {
             System.setErr(stderr)
         }
         if (result.error == null && log.size() > 0) stderr.print(log.toString())
         return result
+    }
+
+    /**
+     * Runs [block] on its own thread so a preview stuck in a loop can't hold up the others. A stuck
+     * thread can't be stopped safely, so it is left behind as a daemon; the process exits at the end.
+     */
+    private fun withTimeout(job: RenderJob, options: Options, block: () -> RenderResult): RenderResult {
+        var result: RenderResult? = null
+        var failure: Throwable? = null
+        val worker = Thread({
+            try {
+                result = block()
+            } catch (t: Throwable) {
+                failure = t
+            }
+        }, "spyglass-render")
+        worker.isDaemon = true
+        worker.contextClassLoader = Thread.currentThread().contextClassLoader
+        worker.start()
+        worker.join(options.timeoutSec * 1000L)
+        if (!worker.isAlive) {
+            failure?.let { throw it }
+            result?.let { return it }
+        }
+        val stuckAt = worker.stackTrace.firstOrNull { f -> frameworkPrefixes.none(f.className::startsWith) }
+            ?.let { " Stuck at ${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber})." } ?: ""
+        return RenderResult(
+            job.spec, file = null, widthPx = 0, heightPx = 0, durationMs = options.timeoutSec * 1000L,
+            error = "${job.spec.functionName} did not finish within ${options.timeoutSec}s, so it may loop or block forever.$stuckAt " +
+                "If it is only slow, raise the limit with --timeout <seconds>.",
+            parameter = job.argumentLabel,
+        )
     }
 
     private fun renderCaptured(job: RenderJob, options: Options, output: File): RenderResult {
@@ -116,28 +158,52 @@ internal object PreviewRenderer {
             val density = Density(options.density, spec.fontScale.takeIf { it > 0f } ?: 1f)
             val locals = arrayOf<ProvidedValue<*>>(LocalInspectionMode provides true) + SystemThemeLocal.provide(spec.dark)
 
-            var measured = IntSize.Zero
-            val scene = ImageComposeScene(sceneWidth, sceneHeight, density) {
+            fun draw(widthPx: Int, heightPx: Int) = Drawing.of(widthPx, heightPx, density) { onMeasured ->
                 CompositionLocalProvider(*locals) {
                     PreviewFrame(
                         spec = spec,
                         fixedWidth = fixedWidthDp != null,
                         fixedHeight = fixedHeightDp != null,
-                        onMeasured = { measured = it },
+                        onMeasured = onMeasured,
                     ) { InvokePreview(target, job) }
                 }
             }
-            try {
-                scene.render(0)
-                val image = scene.render(SECOND_FRAME_NANOS)
-                if (measured.width <= 0 || measured.height <= 0) {
-                    throw PreviewProblem("${spec.functionName} drew nothing (measured ${measured.width}x${measured.height} px). Give it content or a size.")
+
+            var drawing = draw(sceneWidth, sceneHeight)
+            val notes = mutableListOf<String>()
+            if (drawing.atWidthLimit || drawing.atHeightLimit) {
+                // Content that reaches the limit is either long (a 30-row page) or fills whatever it gets
+                // (fillMaxSize, a scrolling list). A bigger canvas tells them apart: long content stops
+                // growing and is shown whole; filling content keeps the limit and gets a note.
+                val wider = if (drawing.atWidthLimit) sceneWidth * GROW else sceneWidth
+                val taller = if (drawing.atHeightLimit) sceneHeight * GROW else sceneHeight
+                val retry = if (wider.toLong() * taller <= MAX_PIXELS) draw(wider, taller) else null
+                val widthFits = !drawing.atWidthLimit || (retry != null && !retry.atWidthLimit)
+                val heightFits = !drawing.atHeightLimit || (retry != null && !retry.atHeightLimit)
+                if (retry != null && widthFits && heightFits) {
+                    drawing.close()
+                    drawing = retry
+                } else {
+                    retry?.close()
+                    val axes = listOfNotNull("width".takeIf { !widthFits }, "height".takeIf { !heightFits })
+                    val limits = axes.joinToString(" and ") { "${((if (it == "width") sceneWidth else sceneHeight) / options.density).roundToInt()}dp $it" }
+                    notes += "Fills all the room it gets (fillMaxSize, a scrolling list or a very long page), so it is shown at the " +
+                        "$limits limit${if (axes.size > 1) "s" else ""}. Set ${axes.joinToString(" and ") { it + "Dp" }} or a device size to preview a real screen."
                 }
-                writePng(image, measured.width, measured.height, output)
-            } finally {
-                scene.close()
             }
-            RenderResult(spec, output, measured.width, measured.height, elapsedMs(), error = null, parameter = job.argumentLabel)
+            drawing.use {
+                if (it.measured.width <= 0 || it.measured.height <= 0) {
+                    throw PreviewProblem("${spec.functionName} drew nothing (measured ${it.measured.width}x${it.measured.height} px). Give it content or a size.")
+                }
+                writePng(it.image, it.measured.width, it.measured.height, output)
+                if (it.stillAnimating) {
+                    notes += "Still animating after ${SETTLE_LIMIT_NANOS / 1_000_000_000}s (an endless animation or loop); this is one moment of it."
+                }
+                RenderResult(
+                    spec, output, it.measured.width, it.measured.height, elapsedMs(), error = null,
+                    parameter = job.argumentLabel, warning = notes.joinToString(" ").ifEmpty { null },
+                )
+            }
         } catch (t: Throwable) {
             RenderResult(spec, file = null, widthPx = 0, heightPx = 0, elapsedMs(), error = describe(t), parameter = job.argumentLabel)
         }
@@ -190,6 +256,73 @@ internal object PreviewRenderer {
             ?: root.stackTrace.firstOrNull()
         val where = frame?.let { " (at ${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber}))" } ?: ""
         return "${root.javaClass.simpleName}: ${root.message}$where"
+    }
+}
+
+/** One preview drawn on a scene of a given size, with time run forward until it is idle. */
+internal class Drawing private constructor(
+    private val scene: ImageComposeScene,
+    val image: Image,
+    val measured: IntSize,
+    val atWidthLimit: Boolean,
+    val atHeightLimit: Boolean,
+    val stillAnimating: Boolean,
+) : AutoCloseable {
+    override fun close() {
+        image.close()
+        scene.close()
+    }
+
+    companion object {
+        fun of(
+            widthPx: Int,
+            heightPx: Int,
+            density: Density,
+            content: @Composable (onMeasured: (IntSize, Boolean, Boolean) -> Unit) -> Unit,
+        ): Drawing {
+            var measured = IntSize.Zero
+            var atWidth = false
+            var atHeight = false
+            val clock = VirtualTime()
+            val scene = ImageComposeScene(widthPx, heightPx, density, clock) {
+                content { size, w, h ->
+                    measured = size
+                    atWidth = w
+                    atHeight = h
+                }
+            }
+            try {
+                val (image, animating) = settle(scene, clock)
+                return Drawing(scene, image, measured, atWidth, atHeight, animating)
+            } catch (t: Throwable) {
+                scene.close()
+                throw t
+            }
+        }
+
+        /**
+         * Renders frames until the scene is idle: nothing to recompose, no animation frame requested and
+         * no delay() ending within the limit. Idle stretches jump straight to the next delay() wakeup.
+         * Returns the last frame, and whether the preview was still animating when the limit was reached.
+         */
+        private fun settle(scene: ImageComposeScene, clock: VirtualTime): Pair<Image, Boolean> {
+            val limit = PreviewRenderer.SETTLE_LIMIT_NANOS
+            var time = 0L
+            var image = scene.render(time)
+            while (true) {
+                val animating = scene.hasInvalidations()
+                val wakeup = clock.nextWakeup()
+                // At the limit, a loop like `while (true) { delay(16); tick++ }` counts as still animating.
+                if (time >= limit) return image to (animating || (wakeup != null && wakeup <= time + 1_000_000_000L))
+                if (!animating && (wakeup == null || wakeup > limit)) return image to false
+                time += PreviewRenderer.FRAME_NANOS
+                if (!animating && wakeup != null) time = maxOf(time, wakeup)
+                time = minOf(time, limit)
+                clock.advanceTo(time)
+                image.close()
+                image = scene.render(time)
+            }
+        }
     }
 }
 
@@ -247,7 +380,8 @@ private fun PreviewFrame(
     spec: PreviewSpec,
     fixedWidth: Boolean,
     fixedHeight: Boolean,
-    onMeasured: (IntSize) -> Unit,
+    /** The size, and whether the content reached the width and height limits. */
+    onMeasured: (IntSize, Boolean, Boolean) -> Unit,
     content: @Composable () -> Unit,
 ) {
     val background = when {
@@ -264,7 +398,11 @@ private fun PreviewFrame(
         val placeables = measurables.map { it.measure(loose) }
         val width = if (fixedWidth) constraints.maxWidth else placeables.maxOfOrNull { it.width } ?: 0
         val height = if (fixedHeight) constraints.maxHeight else placeables.maxOfOrNull { it.height } ?: 0
-        onMeasured(IntSize(width, height))
+        onMeasured(
+            IntSize(width, height),
+            !fixedWidth && width >= constraints.maxWidth,
+            !fixedHeight && height >= constraints.maxHeight,
+        )
         layout(width, height) { placeables.forEach { it.place(0, 0) } }
     }
 }

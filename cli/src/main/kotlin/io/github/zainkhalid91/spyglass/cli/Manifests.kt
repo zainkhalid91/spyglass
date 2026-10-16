@@ -20,6 +20,8 @@ internal class PreviewEntry(
     val heightPx: Int,
     val density: Double,
     val error: String?,
+    /** A note about an image that did render, e.g. content cut off at the size limit. */
+    val warning: String? = null,
 )
 
 /** Reads the `previews.json` files the renderer writes under `build/spyglass/previews/`. */
@@ -39,6 +41,7 @@ internal object Manifests {
                 heightPx = p["heightPx"]?.jsonPrimitive?.intOrNull ?: 0,
                 density = density,
                 error = p.string("error"),
+                warning = p.string("warning"),
             )
         }
     }

@@ -11,6 +11,7 @@ internal object RenderCommand {
         "--max-width-dp" to "maxWidthDp",
         "--max-height-dp" to "maxHeightDp",
         "--target" to "target",
+        "--timeout" to "timeout",
     )
 
     fun run(raw: List<String>): Int {
@@ -48,6 +49,7 @@ internal object RenderCommand {
         for (p in previews) {
             if (p.error == null) {
                 println("  ok     ${Rendering.label(p)}  ${p.widthPx}x${p.heightPx}px  ${p.image}")
+                p.warning?.let { println("         note: $it") }
             } else {
                 println("  error  ${Rendering.label(p)}  ${p.error}")
             }

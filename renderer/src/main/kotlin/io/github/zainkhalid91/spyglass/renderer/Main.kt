@@ -65,6 +65,7 @@ private fun report(r: RenderResult) {
         (r.parameter?.let { " ($it)" } ?: "")
     if (r.error == null) {
         println("  [ok]    $label  ${r.widthPx}x${r.heightPx}px  ${r.durationMs}ms")
+        r.warning?.let { println("          note: $it") }
     } else {
         println("  [error] $label  ${r.error}")
     }

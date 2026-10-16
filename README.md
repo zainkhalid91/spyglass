@@ -147,6 +147,8 @@ A preview that throws doesn't stop the run. It is reported with its error and th
   error  BrokenKt.BrokenPreview  IllegalStateException: Intentional failure to test error reporting (at sample.BrokenKt.BrokenPreview(Broken.kt:10))
 ```
 
+Animations, `AnimatedVisibility`, dialogs fading in and fake data loaded after a `delay()` are shown finished, not at their first frame. A preview stuck in a loop is cut off after 30 seconds (`--timeout`) with the line it was stuck on, and the other previews still render. Content longer than the canvas limit is drawn whole; content that fills whatever room it gets, like `fillMaxSize`, is drawn at the limit with a note saying so. [`samples/new-uis`](samples/new-uis) holds these cases.
+
 ---
 
 ## How it works
@@ -184,12 +186,15 @@ flowchart TB
 **5. Calling a composable by reflection.** A `@Composable fun Foo()` compiles to a method `Foo(Composer, int)`, or `Foo(value, Composer, int)` with a `@PreviewParameter`. Spyglass composes a host inside an offscreen `ImageComposeScene` and invokes the preview method with the scene's current `Composer`. Previews in a Kotlin `object` are called on its `INSTANCE`, and previews in a class on a new instance. During the render:
 - `LocalInspectionMode` is `true`, as in the IDE.
 - Compose desktop's system theme is pinned: light, or dark when `uiMode` asks for night. `isSystemInDarkTheme()` gives the same answer on every machine, and dark variants really render dark.
-- Two frames are rendered, so state set in the first frame's effects shows up.
-- The content is measured and the PNG is cropped to it. `widthDp` / `heightDp` or a `device = "spec:…"` size (exact with `showSystemUi`) fixes the canvas instead.
+- Time is virtual. Frames are rendered on a virtual clock, and `delay()` in effects waits on that clock instead of the wall clock. Frames continue until nothing is left to recompose, no animation asks for a frame, and no `delay()` ends within 2 seconds. Idle stretches jump straight to the next `delay()`. A `delay(300)` before fake data appears costs no real time, and the preview shows the loaded state. An animation that never ends, like an indeterminate spinner, is captured at 2 seconds and gets a `warning`.
+- Each preview runs on its own thread with a time limit (30 s, `--timeout`). A preview that loops forever is reported as stuck at its line in your code, and the run moves on.
+- The content is measured and the PNG is cropped to it. `widthDp` / `heightDp` or a `device = "spec:…"` size (exact with `showSystemUi`) fixes the canvas instead. If content reaches the canvas limit (1024dp), it is drawn once more on a canvas four times larger:
+  - Content that stops growing, such as a long settings page, is shown whole.
+  - Content that keeps filling, such as `fillMaxSize` or a lazy list, is shown at the limit with a `warning` suggesting a fixed size.
 - `fontScale`, `showBackground` and `backgroundColor` are applied.
 - Compose's own error log is captured, so a crashing preview becomes one line that points at your code (`Broken.kt:10`), not a stack trace.
 
-**6. A manifest for machines.** Every run writes `build/spyglass/previews/previews.json` with each preview's function, `@Preview` name, parameter value, status, image path, size and error, and adds its path to a report file the CLI reads. `spyglass render --json` prints a compact version, with image paths relative to the project root:
+**6. A manifest for machines.** Every run writes `build/spyglass/previews/previews.json` with each preview's function, `@Preview` name, parameter value, status, image path, size, error and warning, and adds its path to a report file the CLI reads. `spyglass render --json` prints a compact version, with image paths relative to the project root:
 
 ```json
 {"root":"/work/app","rendered":2,"failed":1,"previews":[{"preview":"CardsKt.WeatherCardPreview","image":"build/spyglass/previews/CardsKt.WeatherCardPreview.png","px":"480x341"},{"preview":"VariantsKt.StatusChipPreview (Online)","image":"build/spyglass/previews/VariantsKt.StatusChipPreview_0.png","px":"168x61"},{"preview":"BrokenKt.BrokenPreview","error":"IllegalStateException: … (at sample.BrokenKt.BrokenPreview(Broken.kt:10))"}]}
@@ -293,7 +298,7 @@ spyglass refs                         # the UI memory
 spyglass help
 ```
 
-Images land in `<module>/build/spyglass/previews/`. Render options: `--density` (default 2), `--max-width-dp` / `--max-height-dp` (canvas limit for previews without a fixed size, default 1024), `--target` (JVM target name, detected by default), `--fail-on-error`.
+Images land in `<module>/build/spyglass/previews/`. Render options: `--density` (default 2), `--max-width-dp` / `--max-height-dp` (canvas limit for previews without a fixed size, default 1024), `--target` (JVM target name, detected by default), `--timeout` (seconds one preview may take, default 30), `--fail-on-error`.
 
 ## Use with AI agents
 
@@ -370,7 +375,7 @@ plugins {
 }
 ```
 
-Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.filter=<text>`, `-Pspyglass.density=2`, `-Pspyglass.maxWidthDp=1024`, `-Pspyglass.maxHeightDp=1024`, `-Pspyglass.target=<jvm target>`, `-Pspyglass.failOnError=true`. The plugin isn't published yet; [`samples/desktop-sample`](samples/desktop-sample) shows how to use it from this repository.
+Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.filter=<text>`, `-Pspyglass.density=2`, `-Pspyglass.maxWidthDp=1024`, `-Pspyglass.maxHeightDp=1024`, `-Pspyglass.target=<jvm target>`, `-Pspyglass.timeout=30`, `-Pspyglass.failOnError=true`. The plugin isn't published yet; [`samples/desktop-sample`](samples/desktop-sample) shows how to use it from this repository.
 
 ## Limits
 
@@ -395,6 +400,7 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 | [`cli/`](cli) | Kotlin. The `spyglass` command: runs your Gradle wrapper with the bundled plugin, reads manifests, diffs images, and serves MCP. |
 | [`skills/spyglass/`](skills/spyglass) | The Claude Code skill. |
 | [`samples/desktop-sample/`](samples/desktop-sample) | A Compose Multiplatform project used for testing and for every image and score in this README and the demo video. |
+| [`samples/new-uis/`](samples/new-uis) | Harder UIs: animations, delayed loading, spinners, dialogs, menus, a Scaffold with a lazy list, Urdu right-to-left text, long and full-screen content, and a preview stuck in a loop. |
 | [`samples/edge-cases/`](samples/edge-cases) | A multi-module build covering cross-module multi-previews, `@PreviewParameter`, class previews, a `kotlin("jvm")` module and a module with no JVM target. |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Continuous testing; see below. |
 

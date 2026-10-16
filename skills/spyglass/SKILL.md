@@ -34,12 +34,14 @@ Run from the project root, or a module folder to render only that module (`--mod
 
 ## Supported
 
-`@Preview` (also repeated, in objects or classes), multi-preview annotations including `@PreviewLightDark`, `@PreviewFontScale`, `@PreviewScreenSizes` and your own, `@PreviewParameter` (one image per value), `uiMode` dark, `fontScale`, `widthDp`/`heightDp`, `device = "spec:..."`, `showBackground`, `backgroundColor`.
+Animations, `AnimatedVisibility`, dialogs and data loaded after `delay()` are shown finished (a virtual clock runs up to 2 s). `@Preview` (also repeated, in objects or classes), multi-preview annotations including `@PreviewLightDark`, `@PreviewFontScale`, `@PreviewScreenSizes` and your own, `@PreviewParameter` (one image per value), `uiMode` dark, `fontScale`, `widthDp`/`heightDp`, `device = "spec:..."`, `showBackground`, `backgroundColor`.
 
 ## Errors
 
 - Gradle failure: the reply holds the compile error with file and line. Fix it and render again.
 - A preview that throws is reported with the exception and its source line; other previews still render.
+- A preview that doesn't finish in 30 s is reported as stuck, with the line it was stuck on: look for a loop there.
+- A `warning` on an image that did render matters: "Fills all the room it gets" means the screen needs `widthDp`/`heightDp` or a device size before judging its layout; "Still animating" means the image is one moment of an endless animation.
 - "No previews rendered": check the filter, and that the module has `jvm()` or `jvm("desktop")`.
 
 ## Limits

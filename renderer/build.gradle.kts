@@ -24,7 +24,7 @@ dependencies {
     implementation(libs.classgraph)
 
     // The Compose compiler plugin refuses to compile any source set without the runtime present.
-    testCompileOnly(libs.compose.runtime)
+    testImplementation(libs.compose.runtime) // also brings kotlinx-coroutines for VirtualTimeTest
     testImplementation(libs.kotlin.test.junit5)
     testImplementation(platform(libs.junit.bom))
     testRuntimeOnly(libs.junit.platform.launcher)
