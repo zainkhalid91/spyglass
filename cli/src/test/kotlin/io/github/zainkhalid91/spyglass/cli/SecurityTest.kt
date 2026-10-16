@@ -93,7 +93,7 @@ class SecurityTest {
         val path = listOf(".", "", "relative\\bin", bin.path).joinToString(File.pathSeparator)
         assertEquals(File(bin, "gh.exe").path, Executables.onPath("gh", path, windows = true))
         assertEquals(null, Executables.onPath("gh", ".${File.pathSeparator}relative", windows = true))
-        assertTrue(File(Executables.cmd).isAbsolute)
+        if (GradleBuild.isWindows) assertTrue(File(Executables.cmd).isAbsolute) // cmd.exe is only used on Windows
     }
 
     /** A PNG signature and IHDR chunk claiming [w] x [h], with no pixel data at all. */
