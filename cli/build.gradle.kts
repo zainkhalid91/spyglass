@@ -48,3 +48,34 @@ application {
     applicationName = "spyglass"
     applicationDefaultJvmArgs = listOf("-Djava.awt.headless=true")
 }
+
+// Apps on macOS (Claude Desktop, Cursor, ...) start MCP servers with a minimal PATH, and /usr/bin/java is
+// only a stub that asks to install Java. Without JAVA_HOME, the launcher looks for a JDK the way macOS
+// tools do, then in Homebrew's usual places.
+val findMacJdk = """
+# Spyglass: on macOS without JAVA_HOME, find a JDK (apps start MCP servers with a minimal PATH).
+if [ -z "${'$'}JAVA_HOME" ] && [ "${'$'}( uname )" = Darwin ] ; then
+    for candidate in "${'$'}( /usr/libexec/java_home 2>/dev/null )" \
+        /opt/homebrew/opt/openjdk*/libexec/openjdk.jdk/Contents/Home \
+        /usr/local/opt/openjdk*/libexec/openjdk.jdk/Contents/Home ; do
+        if [ -n "${'$'}candidate" ] && [ -x "${'$'}candidate/bin/java" ] ; then
+            JAVA_HOME=${'$'}candidate
+            break
+        fi
+    done
+fi
+
+# Determine the Java command to use to start the JVM.
+"""
+
+tasks.startScripts {
+    // Only plain values go into the action, so the configuration cache can store it.
+    val lookup = findMacJdk.trimStart()
+    val script = unixScript
+    doLast {
+        val anchor = "# Determine the Java command to use to start the JVM.\n"
+        val text = script.readText()
+        if (anchor !in text) throw GradleException("Gradle's start script changed; update findMacJdk")
+        script.writeText(text.replaceFirst(anchor, lookup))
+    }
+}

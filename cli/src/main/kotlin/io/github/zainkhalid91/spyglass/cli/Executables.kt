@@ -12,10 +12,17 @@ internal object Executables {
     val cmd: String
         get() = File(System.getenv("SystemRoot") ?: "C:\\Windows", "System32\\cmd.exe").path
 
-    /** [name] from PATH, using only absolute PATH entries; null when it isn't installed. */
+    // Apps on macOS start MCP servers with a minimal PATH that leaves out where Homebrew installs tools.
+    private val packageManagerDirs = listOf("/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin")
+
+    /**
+     * [name] from PATH, using only absolute PATH entries, then (outside Windows) from Homebrew's folders;
+     * null when it isn't installed.
+     */
     fun onPath(name: String, path: String? = System.getenv("PATH"), windows: Boolean = GradleBuild.isWindows): String? {
         val names = if (windows) listOf("$name.exe", "$name.cmd", "$name.bat") else listOf(name)
-        return path.orEmpty().split(File.pathSeparatorChar)
+        val extra = if (windows) emptyList() else packageManagerDirs
+        return (path.orEmpty().split(File.pathSeparatorChar) + extra)
             .map { it.trim().removeSurrounding("\"") }
             .filter { it.isNotEmpty() && File(it).isAbsolute }
             .firstNotNullOfOrNull { dir -> names.map { File(dir, it) }.firstOrNull { it.isFile && (windows || it.canExecute()) } }

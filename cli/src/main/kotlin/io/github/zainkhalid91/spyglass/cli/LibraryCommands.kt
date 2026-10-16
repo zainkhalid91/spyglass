@@ -75,13 +75,23 @@ internal object CheckCommand {
         val json = args.has("--json")
 
         val outcome = renderFrom(args, quiet = json)
-        val results = evaluate(outcome.previews, outcome.root, Library(outcome.root), threshold, failUnder)
+        val library = Library(outcome.root)
+        val results = evaluate(outcome.previews, outcome.root, library, threshold, failUnder)
+        val note = osNote(library.baselineOs, Library.currentOs)
         val failed = results.filter { it.regression || (args.has("--strict") && it.status in setOf("new", "error")) }
         Telemetry.count("cli.check")
         Telemetry.count("check.changed", results.count { it.status == "changed" })
 
-        if (json) printJson(results, failed.isEmpty()) else printHuman(results, failed.size)
+        if (json) printJson(results, failed.isEmpty(), note) else printHuman(results, failed.size, note)
         return if (failed.isEmpty()) 0 else 1
+    }
+
+    /** Explains why renders may not match baselines made on another OS: each OS draws text with its own fonts. */
+    fun osNote(baselineOs: String?, currentOs: String): String? {
+        if (baselineOs == null || baselineOs == currentOs) return null
+        return "The baselines were approved on $baselineOs and this is $currentOs. Text is drawn with each system's " +
+            "fonts, so expect small differences in anything with text. Run spyglass check on the OS that approved the " +
+            "baselines (as CI does), or approve a separate set on this one."
     }
 
     fun evaluate(previews: List<PreviewEntry>, root: File, library: Library, threshold: Double, failUnder: Double): List<CheckResult> =
@@ -112,7 +122,7 @@ internal object CheckCommand {
         return (if (p.name.isEmpty()) base else "${base}_${p.name}").replace(Regex("[^A-Za-z0-9._-]"), "_")
     }
 
-    private fun printHuman(results: List<CheckResult>, failures: Int) {
+    private fun printHuman(results: List<CheckResult>, failures: Int, note: String?) {
         for (r in results) {
             val score = r.similarity?.let { String.format(Locale.ROOT, "%.2f%%", it * 100) } ?: ""
             when (r.status) {
@@ -127,12 +137,14 @@ internal object CheckCommand {
         }
         val counts = results.groupingBy { it.status }.eachCount()
         println("spyglass check: ${counts["same"] ?: 0} same, ${counts["changed"] ?: 0} changed, ${counts["new"] ?: 0} new, ${counts["error"] ?: 0} errors")
+        note?.let { println("spyglass check: note: $it") }
         if (failures > 0) println("spyglass check: FAILED ($failures)") else println("spyglass check: passed")
     }
 
-    private fun printJson(results: List<CheckResult>, passed: Boolean) {
+    private fun printJson(results: List<CheckResult>, passed: Boolean, note: String?) {
         val json = buildJsonObject {
             put("passed", passed)
+            note?.let { put("note", it) }
             putJsonArray("previews") {
                 for (r in results) addJsonObject {
                     put("preview", r.preview)

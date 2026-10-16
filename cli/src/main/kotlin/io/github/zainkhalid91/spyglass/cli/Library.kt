@@ -122,6 +122,7 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
      * project with `build/spyglass/previews/` removed, so modules keep separate baselines.
      */
     fun approve(render: File, key: String, preview: String): Ref {
+        baselineOs = currentOs
         val target = baselineFile(key)
         target.parentFile.mkdirs()
         Files.copy(render.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
@@ -129,6 +130,14 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
     }
 
     fun baseline(key: String): File? = baselineFile(key).takeIf { it.isFile }
+
+    /** The OS the baselines were approved on (windows, mac or linux), or null if not recorded. */
+    var baselineOs: String?
+        get() = File(baselinesDir, OS_FILE).takeIf { it.isFile }?.readText()?.trim()?.takeIf { it in OS_NAMES }
+        set(value) {
+            baselinesDir.mkdirs()
+            File(baselinesDir, OS_FILE).writeText(value.orEmpty() + "\n")
+        }
 
     /** The baseline for [key], refusing keys that would point outside the baselines folder. */
     private fun baselineFile(key: String): File {
@@ -228,6 +237,20 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
         private val ID = Regex("[0-9a-f]{12}")
 
         /** `app/build/spyglass/previews/X.png` under [root] becomes `app/X.png`. */
+        /** Next to the baselines: the OS they were approved on, since fonts (and so renders) differ by OS. */
+        const val OS_FILE = "approved-on.txt"
+        private val OS_NAMES = setOf("windows", "mac", "linux")
+
+        /** This machine's OS family: windows, mac or linux. */
+        val currentOs: String
+            get() = System.getProperty("os.name").lowercase().let {
+                when {
+                    "win" in it -> "windows"
+                    "mac" in it || "darwin" in it -> "mac"
+                    else -> "linux"
+                }
+            }
+
         fun baselineKey(image: File, root: File): String =
             image.relativeToOrSelf(root).invariantSeparatorsPath.replace("build/spyglass/previews/", "")
     }

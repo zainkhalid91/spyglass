@@ -23,9 +23,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    # Spyglass is verified on Windows. Linux and macOS results are reported, but don't fail the run yet.
+    # Spyglass is verified on Windows. Linux results are reported, but don't fail the run yet. macOS was
+    # verified on a macOS runner (Apple Silicon) and isn't run here, to save Actions minutes.
     continue-on-error: ${{ matrix.os != 'windows-latest' }}
     timeout-minutes: 40
     env:

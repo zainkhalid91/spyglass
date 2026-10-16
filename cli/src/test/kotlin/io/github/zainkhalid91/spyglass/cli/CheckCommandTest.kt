@@ -53,4 +53,16 @@ class CheckCommandTest {
         assertTrue(results.getValue("CardsKt.Broken").regression, "it had a baseline, so failing now is a regression")
         assertFalse(results.getValue("CardsKt.NeverWorked").regression)
     }
+
+    @Test
+    fun `baselines remember the OS they were approved on, and check explains a mismatch`() {
+        val library = Library(root)
+        assertEquals(null, library.baselineOs)
+        library.approve(testImage(File(root, "in/a.png"), 50, 50, emptyList(), java.awt.Color.RED), "a.png", "AKt.A")
+        assertEquals(Library.currentOs, Library(root).baselineOs)
+
+        assertEquals(null, CheckCommand.osNote(null, "mac"))
+        assertEquals(null, CheckCommand.osNote("mac", "mac"))
+        assertTrue(CheckCommand.osNote("windows", "mac")!!.contains("approved on windows and this is mac"))
+    }
 }

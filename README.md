@@ -275,6 +275,8 @@ cd spyglass
 
 The launcher is `cli/build/install/spyglass/bin/spyglass` (`spyglass.bat` on Windows). Copy the `cli/build/install/spyglass` folder somewhere stable and add its `bin` to your `PATH`. Requires JDK 17+.
 
+On macOS, apps like Claude Desktop start MCP servers without your shell's `PATH`. When `JAVA_HOME` isn't set, the launcher finds a JDK itself through `/usr/libexec/java_home` or Homebrew's `openjdk`, and finds `gh` in Homebrew's folders.
+
 ### Compatibility
 
 | | Tested with | Notes |
@@ -283,7 +285,7 @@ The launcher is `cli/build/install/spyglass/bin/spyglass` (`spyglass.bat` on Win
 | Kotlin | 2.4.20 | |
 | Gradle | 9.7.1 | Configuration cache on or off. |
 | JDK | 21 | Built for 17+. |
-| OS | Windows 11, macOS (Apple Silicon), Ubuntu | Every push runs the tests and renders all samples on all three in CI. Text uses each system's fonts, so renders differ slightly between operating systems: compare and keep baselines from one OS (the sample's baselines are from Windows). |
+| OS | Windows 11, macOS (Apple Silicon), Ubuntu | Every push runs the tests and renders all samples on Windows and Linux in CI; macOS was verified on a macOS (Apple Silicon) runner. Text uses each system's fonts, so renders differ slightly between operating systems: compare and keep baselines from one OS (the sample's baselines are from Windows). `spyglass check` says so when the baselines come from another OS. |
 
 ## Use
 
