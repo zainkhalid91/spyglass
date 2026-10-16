@@ -265,7 +265,17 @@ spyglass check: FAILED (1)
 
 ## Install
 
-From source for now:
+Requires JDK 17+. Download `spyglass-0.1.0.zip` from the [latest release](https://github.com/zainkhalid91/spyglass/releases/latest), unzip it somewhere stable, and add its `bin` folder to your `PATH`:
+
+```bash
+unzip spyglass-0.1.0.zip -d ~/tools
+export PATH="$HOME/tools/spyglass-0.1.0/bin:$PATH"
+spyglass version
+```
+
+On Windows, unzip it (for example to `C:\tools`) and add `C:\tools\spyglass-0.1.0\bin` to `PATH`; the launcher is `spyglass.bat`. Each release lists the zip's SHA-256 so you can check the download.
+
+Or build from source:
 
 ```bash
 git clone https://github.com/zainkhalid91/spyglass
@@ -273,7 +283,7 @@ cd spyglass
 ./gradlew :cli:installDist
 ```
 
-The launcher is `cli/build/install/spyglass/bin/spyglass` (`spyglass.bat` on Windows). Copy the `cli/build/install/spyglass` folder somewhere stable and add its `bin` to your `PATH`. Requires JDK 17+.
+The launcher is then `cli/build/install/spyglass/bin/spyglass`.
 
 On macOS, apps like Claude Desktop start MCP servers without your shell's `PATH`. When `JAVA_HOME` isn't set, the launcher finds a JDK itself through `/usr/libexec/java_home` or Homebrew's `openjdk`, and finds `gh` in Homebrew's folders.
 
@@ -391,7 +401,7 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 - Semantics tree output (text, sizes, touch targets) alongside each image
 - Locales, `id:` device names, `@PreviewWrapper`
 - Android-only previews
-- Published Gradle plugin, CLI releases, and a Claude Code plugin bundle
+- Published Gradle plugin and a Claude Code plugin bundle
 
 ## Project layout
 
