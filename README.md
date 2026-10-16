@@ -283,7 +283,7 @@ The launcher is `cli/build/install/spyglass/bin/spyglass` (`spyglass.bat` on Win
 | Kotlin | 2.4.20 | |
 | Gradle | 9.7.1 | Configuration cache on or off. |
 | JDK | 21 | Built for 17+. |
-| OS | Windows 11 | macOS and Linux aren't tested yet. Please open an issue if something breaks there. |
+| OS | Windows 11, macOS (Apple Silicon), Ubuntu | Every push runs the tests and renders all samples on all three in CI. Text uses each system's fonts, so renders differ slightly between operating systems: compare and keep baselines from one OS (the sample's baselines are from Windows). |
 
 ## Use
 
