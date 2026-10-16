@@ -45,6 +45,7 @@ private val HELP = """
     |  spyglass mcp [--project <dir>]            Run as an MCP server on stdio, for AI agents
     |                                            (tools: render_previews, compare_with_design, diff_images, references)
     |      --project <dir>      Default project for tools (default: the server's working directory)
+    |      --allow-any-project  Let tools render projects outside it (they run that project's build)
     |
     |  spyglass telemetry [status|on|off|show|send]
     |                                            Opt-in anonymous usage numbers (off unless you turn it on)
@@ -78,8 +79,9 @@ private fun run(args: List<String>): Int = when (args.firstOrNull()) {
     "refs" -> RefsCommand.run(args.drop(1))
     "telemetry" -> TelemetryCommand.run(args.drop(1))
     "mcp" -> {
-        val options = Args.parse(args.drop(1), options = setOf("--project"), switches = emptySet())
+        val options = Args.parse(args.drop(1), options = setOf("--project"), switches = setOf("--allow-any-project"))
         options["--project"]?.let { McpTools.defaultProject = File(it).absoluteFile }
+        McpTools.allowAnyProject = options.has("--allow-any-project")
         McpServer.run()
     }
     "version", "--version" -> {

@@ -53,6 +53,8 @@ class LibraryTest {
         assertEquals(design.id, library.find("Plan-Card")?.id)
         assertEquals(design.id, library.find(design.id.take(6))?.id)
         assertNull(library.find("nothing-like-this"))
+        val render = library.record(img("chip.png", listOf(intArrayOf(5, 5, 9, 9))), Library.KIND_RENDER, preview = "CardsKt.Chip [Dark]")
+        assertEquals(render.id, library.find("cardskt.chip [dark]")?.id)
 
         val closest = library.similar(img("near.png", listOf(intArrayOf(21, 20, 80, 80))))
         assertEquals(design.id, closest.first().first.id)

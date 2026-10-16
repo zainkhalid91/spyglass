@@ -14,8 +14,14 @@ internal class GradleBuild(val settingsDir: File, private val wrapperDir: File) 
     private fun command(arguments: List<String>, tmpDir: File?): List<String> {
         val wrapperJar = File(wrapperDir, "gradle/wrapper/gradle-wrapper.jar")
         if (!wrapperJar.isFile) {
-            val script = if (isWindows) listOf("cmd.exe", "/c", ".\\gradlew.bat") else listOf("sh", "./gradlew")
-            return script + listOf("-p", settingsDir.path) + arguments
+            if (isWindows) {
+                // cmd.exe re-parses its command line, so a value like `x&calc` would run a command.
+                (arguments + settingsDir.path).firstOrNull { arg -> arg.any { it in CMD_SPECIAL } }?.let {
+                    throw CliError("refusing to pass '$it' through cmd.exe; add the Gradle wrapper jar (gradle/wrapper/gradle-wrapper.jar) or avoid & | < > ^ % ! \" in values")
+                }
+                return listOf(Executables.cmd, "/c", ".\\gradlew.bat", "-p", settingsDir.path) + arguments
+            }
+            return listOf("sh", "./gradlew", "-p", settingsDir.path) + arguments
         }
         val java = File(System.getProperty("java.home"), if (isWindows) "bin/java.exe" else "bin/java").path
         return buildList {
@@ -75,6 +81,7 @@ internal class GradleBuild(val settingsDir: File, private val wrapperDir: File) 
 
     companion object {
         private const val TAIL_LINES = 60
+        private const val CMD_SPECIAL = "&|<>^%!\"\n\r"
         val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
         /** The nearest build (settings file) at or above [start], and the nearest wrapper at or above that. */
@@ -104,11 +111,17 @@ internal object BundledPlugin {
         val crc = CRC32().apply { update(bytes) }.value.toString(16)
         val dir = File(System.getProperty("user.home"), ".spyglass/$VERSION/$crc").apply { mkdirs() }
         val file = File(dir, name)
-        if (!file.isFile || file.length() != bytes.size.toLong()) {
-            val partial = File(dir, "$name.part")
+        // Gradle loads this jar as build code, so its content is checked on every run, not just its size.
+        if (!file.isFile || !file.readBytes().contentEquals(bytes)) {
+            val partial = File(dir, "$name.${ProcessHandle.current().pid()}.part")
             partial.writeBytes(bytes)
-            if (!partial.renameTo(file) && !file.isFile) throw CliError("could not write $file")
-            partial.delete()
+            try {
+                java.nio.file.Files.move(partial.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            } catch (e: java.io.IOException) {
+                partial.delete()
+                // Another Spyglass process may have written it at the same moment; accept it only if correct.
+                if (!file.isFile || !file.readBytes().contentEquals(bytes)) throw CliError("could not write $file: ${e.message}")
+            }
         }
         return file
     }

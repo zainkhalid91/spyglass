@@ -64,7 +64,7 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
      * Renders are kept as small thumbnails; designs at full size, since they are compared against.
      */
     fun record(file: File, kind: String, preview: String? = null, name: String? = null): Ref {
-        val image = ImageIO.read(file) ?: throw CliError("not a readable image: $file")
+        val image = Images.readChecked(file)
         val print = Fingerprint.of(image)
         val id = print.sha.take(12)
         val now = Instant.now().toString()
@@ -93,17 +93,18 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
     /** The stored copy of a reference: a thumbnail for renders, the full image for designs. */
     fun imageFile(id: String) = File(imagesDir, "$id.png")
 
-    /** By id (or a prefix of at least 4 characters), else by name, most recent first. */
+    /** By id (or a prefix of at least 4 characters), else by name, else by preview; most recent first. */
     fun find(query: String): Ref? {
         val q = query.trim()
         refs[q]?.let { return it }
         if (q.length >= 4) refs.values.filter { it.id.startsWith(q) }.singleOrNull()?.let { return it }
         return refs.values.filter { it.name.equals(q, ignoreCase = true) }.maxByOrNull { it.last }
+            ?: refs.values.filter { it.preview.equals(q, ignoreCase = true) }.maxByOrNull { it.last }
     }
 
     /** References that look like [image], closest first, with their distance (0 = identical). */
     fun similar(image: File, limit: Int = 5, exclude: String? = null): List<Pair<Ref, Int>> {
-        val target = Fingerprint.of(ImageIO.read(image) ?: throw CliError("not a readable image: $image")).dhash
+        val target = Fingerprint.of(Images.readChecked(image)).dhash
         return refs.values.filter { it.id != exclude }
             .map { it to Fingerprint.distance(it.dhash, target) }
             .filter { it.second <= SIMILAR_BITS }
@@ -121,13 +122,21 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
      * project with `build/spyglass/previews/` removed, so modules keep separate baselines.
      */
     fun approve(render: File, key: String, preview: String): Ref {
-        val target = File(baselinesDir, key)
+        val target = baselineFile(key)
         target.parentFile.mkdirs()
         Files.copy(render.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         return record(render, KIND_RENDER, preview).also { it.tags = (it.tags + "approved").distinct() }
     }
 
-    fun baseline(key: String): File? = File(baselinesDir, key).takeIf { it.isFile }
+    fun baseline(key: String): File? = baselineFile(key).takeIf { it.isFile }
+
+    /** The baseline for [key], refusing keys that would point outside the baselines folder. */
+    private fun baselineFile(key: String): File {
+        val base = baselinesDir.canonicalFile
+        val file = File(base, key).canonicalFile
+        if (!file.path.startsWith(base.path + File.separator)) throw CliError("baseline path escapes ${baselinesDir}: $key")
+        return file
+    }
 
     /** Writes the index atomically, so a crash never leaves a half-written file. */
     fun save() {
@@ -158,8 +167,12 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
     private fun load(): MutableMap<String, Ref> {
         if (!indexFile.isFile) return linkedMapOf()
         return try {
+            // The index may come from a cloned repository, so it is untrusted: an id is used as a file
+            // name, and one like "../../x" would reach outside the library. Only real ids are kept.
             Json.parseToJsonElement(indexFile.readText()).jsonObject.getValue("refs").jsonArray
-                .map { it.jsonObject.toRef() }.associateByTo(linkedMapOf()) { it.id }
+                .map { it.jsonObject.toRef() }
+                .filter { ID.matches(it.id) && it.kind in setOf(KIND_RENDER, KIND_DESIGN) }
+                .associateByTo(linkedMapOf()) { it.id }
         } catch (e: Exception) {
             // Keep the damaged file for inspection and start a fresh library rather than failing.
             indexFile.renameTo(File(libraryDir, "refs.json.bak"))
@@ -212,6 +225,7 @@ internal class Library(projectRoot: File, private val maxRenders: Int = MAX_REND
         private const val THUMBNAIL_PX = 480
         private const val MAX_RENDERS = 300
         private const val SIMILAR_BITS = 12
+        private val ID = Regex("[0-9a-f]{12}")
 
         /** `app/build/spyglass/previews/X.png` under [root] becomes `app/X.png`. */
         fun baselineKey(image: File, root: File): String =

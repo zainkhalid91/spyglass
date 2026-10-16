@@ -58,9 +58,36 @@ internal object Images {
         return png(canvas)
     }
 
-    private fun read(file: File): BufferedImage {
+    private fun read(file: File): BufferedImage = readChecked(file)
+
+    /** Images above this are refused: decoding one would need gigabytes and could take the server down. */
+    const val MAX_PIXELS = 40_000_000L
+
+    /**
+     * Reads an image after checking its size from the header, so an enormous (or hostile) file is
+     * rejected before any pixels are decoded.
+     */
+    fun readChecked(file: File): BufferedImage {
         if (!file.isFile) throw CliError("no such image: $file")
-        return ImageIO.read(file) ?: throw CliError("not a readable image: $file")
+        val stream = ImageIO.createImageInputStream(file) ?: throw CliError("not a readable image: $file")
+        stream.use {
+            val readers = ImageIO.getImageReaders(stream)
+            if (!readers.hasNext()) throw CliError("not a readable image: $file")
+            val reader = readers.next()
+            try {
+                reader.input = stream
+                val w = reader.getWidth(0)
+                val h = reader.getHeight(0)
+                if (w.toLong() * h > MAX_PIXELS) {
+                    throw CliError("image too large: ${w}x$h, over ${MAX_PIXELS / 1_000_000} megapixels: $file")
+                }
+                return reader.read(0)
+            } catch (e: java.io.IOException) {
+                throw CliError("not a readable image: $file (${e.message})")
+            } finally {
+                reader.dispose()
+            }
+        }
     }
 
     /** Smooth downscaling: area averaging keeps thin text legible where plain bilinear would alias. */

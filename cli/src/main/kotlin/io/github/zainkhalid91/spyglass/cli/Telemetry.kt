@@ -109,6 +109,7 @@ internal object Telemetry {
         |See exactly what would be sent with `spyglass telemetry show`.
     """.trimMargin()
 
+    @Synchronized
     fun setEnabled(on: Boolean) {
         writeSettings(settings() + mapOf("enabled" to JsonPrimitive(on)))
         cachedEnabled = on
@@ -121,22 +122,27 @@ internal object Telemetry {
     // ------------------------------------------------------------------ storage and sending
 
     /** Adds this process's counters to the stored ones. */
+    @Synchronized
     fun flush() {
         val batch = synchronized(pending) { pending.toMap().also { pending.clear() } }
         if (batch.isEmpty() || !enabled) return
         val stored = counters().toMutableMap()
         batch.forEach { (k, v) -> stored[k] = (stored[k] ?: 0) + v }
-        home.mkdirs()
-        usageFile.writeText(Json.encodeToString(JsonElement.serializer(), JsonObject(stored.mapValues { JsonPrimitive(it.value) })))
+        writeCounters(stored)
     }
 
+    private fun writeCounters(counts: Map<String, Int>) {
+        home.mkdirs()
+        usageFile.writeText(Json.encodeToString(JsonElement.serializer(), JsonObject(counts.mapValues { JsonPrimitive(it.value) })))
+    }
+
+    @Synchronized
     fun counters(): Map<String, Int> = runCatching {
         Json.parseToJsonElement(usageFile.readText()).jsonObject.mapValues { it.value.jsonPrimitive.intOrNull ?: 0 }
     }.getOrDefault(emptyMap())
 
     /** The exact text that would be posted. */
-    fun report(): String {
-        val counts = counters()
+    fun report(counts: Map<String, Int> = counters()): String {
         return buildString {
             appendLine("<!-- spyglass usage report: anonymous counters, opt-in -->")
             appendLine("```json")
@@ -158,35 +164,50 @@ internal object Telemetry {
 
     /** Sends when enabled, due and there is something to send. Failures are silent and retried later. */
     fun sendIfDue(): Boolean {
-        if (!enabled || counters().isEmpty()) return false
-        val last = settings()["lastSent"]?.jsonPrimitive?.contentOrNull?.let { runCatching { Instant.parse(it) }.getOrNull() }
-        if (last != null && Duration.between(last, Instant.now()) < SEND_EVERY) return false
-        return send()
+        val due = synchronized(this) {
+            val last = settings()["lastSent"]?.jsonPrimitive?.contentOrNull?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            enabled && counters().isNotEmpty() && (last == null || Duration.between(last, Instant.now()) >= SEND_EVERY)
+        }
+        return due && send()
     }
 
-    /** Posts the report with `gh`. Returns false (and keeps the counters) if anything goes wrong. */
+    /**
+     * Posts the report with `gh`. The lock is not held while gh runs, so tool calls never wait on the
+     * network; only the counters that were sent are removed afterwards. Returns false (keeping the
+     * counters) if anything goes wrong.
+     */
     fun send(): Boolean {
-        if (!enabled || counters().isEmpty()) return false
+        val snapshot = synchronized(this) { if (enabled) counters() else emptyMap() }
+        if (snapshot.isEmpty()) return false
         val issue = gh("issue", "list", "-R", REPO, "--label", LABEL, "--state", "open", "--limit", "1", "--json", "number", "-q", ".[0].number")
-            ?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-        val body = File.createTempFile("spyglass-usage", ".md").apply { writeText(report()) }
+            ?.trim()?.toIntOrNull() ?: return false
+        val body = File.createTempFile("spyglass-usage", ".md").apply { writeText(report(snapshot)) }
         try {
-            gh("issue", "comment", issue, "-R", REPO, "--body-file", body.path) ?: return false
+            gh("issue", "comment", issue.toString(), "-R", REPO, "--body-file", body.path) ?: return false
         } finally {
             body.delete()
         }
-        usageFile.delete()
-        writeSettings(settings() + mapOf("lastSent" to JsonPrimitive(Instant.now().toString())))
+        synchronized(this) {
+            val remaining = counters().mapValues { (k, v) -> v - (snapshot[k] ?: 0) }.filterValues { it > 0 }
+            if (remaining.isEmpty()) usageFile.delete() else writeCounters(remaining)
+            writeSettings(settings() + mapOf("lastSent" to JsonPrimitive(Instant.now().toString())))
+        }
         return true
     }
 
+    /** Runs gh with a hard timeout; output goes to a file so a hung gh can't block on a full pipe. */
     private fun gh(vararg args: String): String? = runCatching {
-        val process = ProcessBuilder(listOf("gh") + args).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        if (!process.waitFor(30, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            null
-        } else if (process.exitValue() == 0) output else null
+        val gh = Executables.onPath("gh") ?: return null
+        val out = File.createTempFile("spyglass-gh", ".txt")
+        try {
+            val process = ProcessBuilder(listOf(gh) + args).redirectErrorStream(true).redirectOutput(out).start()
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                null
+            } else if (process.exitValue() == 0) out.readText() else null
+        } finally {
+            out.delete()
+        }
     }.getOrNull()
 
     private fun settings(): Map<String, JsonElement> =

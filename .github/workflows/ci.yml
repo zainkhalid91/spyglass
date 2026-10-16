@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Every two days at 03:17 UTC, to catch breakage from new runner images, JDKs or dependencies
+    # even when nothing was pushed.
+    - cron: "17 3 */2 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # Spyglass is verified on Windows. Linux results are reported, but don't fail the run yet.
+    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
+    timeout-minutes: 40
+    env:
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Unit tests and CLI build
+        run: ./gradlew test :cli:installDist --console=plain
+
+      - name: Render the samples
+        run: |
+          cli/build/install/spyglass/bin/spyglass render --project samples/desktop-sample
+          cli/build/install/spyglass/bin/spyglass render --project samples/edge-cases
+
+      # Baselines in samples/desktop-sample/.spyglass/baselines were rendered on Windows; fonts differ
+      # between operating systems, so the pixel comparison runs on Windows only.
+      - name: Visual regression check
+        if: runner.os == 'Windows'
+        run: cli/build/install/spyglass/bin/spyglass check --project samples/desktop-sample --fail-under 0.995
+
+      - name: Upload renders, heatmaps and test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ matrix.os }}
+          path: |
+            samples/**/build/spyglass/
+            renderer/build/reports/tests/
+            cli/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report-scheduled-failure:
+    needs: test
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue for the failed scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create -R "$GITHUB_REPOSITORY" \
+            --title "Scheduled CI failed on $(date -u +%F)" \
+            --label ci-failure \
+            --body "The every-two-days CI run failed: $RUN_URL. The scheduled improvement routine picks these up."

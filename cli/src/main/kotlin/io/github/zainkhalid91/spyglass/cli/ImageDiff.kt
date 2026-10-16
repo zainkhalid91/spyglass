@@ -92,7 +92,7 @@ internal object ImageDiff {
 
     private fun read(file: File): BufferedImage {
         if (!file.isFile) throw CliError("no such image: $file")
-        return ImageIO.read(file) ?: throw CliError("not a readable image: $file")
+        return Images.readChecked(file)
     }
 
     /** RGB pixels at [w]x[h], with transparency flattened onto white like a preview background. */

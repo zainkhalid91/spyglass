@@ -38,6 +38,12 @@ internal object McpTools {
     /** The project tools render when a call doesn't pass `projectDir`; set by `spyglass mcp --project`. */
     var defaultProject: File = File(".")
 
+    /**
+     * Rendering runs a project's Gradle build, which executes that project's code. So by default an
+     * agent may only render inside the server's own project; `spyglass mcp --allow-any-project` lifts it.
+     */
+    var allowAnyProject = false
+
     /** Reference ids of images sent to the agent, and when. */
     private val sent = mutableMapOf<String, Instant>()
 
@@ -256,7 +262,8 @@ internal object McpTools {
         val density = args.double("density") ?: 2.0
         if (density <= 0) throw CliError("'density' must be positive")
         val maxPx = args.imageMaxPx()
-        val heatmap = File(actual.parentFile, actual.nameWithoutExtension + ".diff.png")
+        // Written inside the project's build folder, never next to an arbitrary path an agent passed in.
+        val heatmap = File(projectRoot(args), "build/spyglass/diffs/${actual.nameWithoutExtension}.diff.png")
         val diff = ImageDiff.compare(actual, expected, threshold, heatmap)
         Telemetry.similarity(diff.similarity)
         return result(
@@ -357,7 +364,20 @@ internal object McpTools {
         return Rendering.render(start(args), args.string("module"), options, quiet = true)
     }
 
-    private fun start(args: JsonObject) = args.string("projectDir")?.let(::path) ?: defaultProject.absoluteFile.normalize()
+    private fun start(args: JsonObject): File {
+        val home = defaultProject.absoluteFile.normalize()
+        val dir = args.string("projectDir")?.let(::path) ?: return home
+        if (!allowAnyProject && !isInside(dir, home)) {
+            throw CliError("projectDir must be inside the server's project ($home). Start the server with --allow-any-project to render other projects.")
+        }
+        return dir
+    }
+
+    private fun isInside(dir: File, root: File): Boolean {
+        val d = dir.canonicalFile
+        val r = root.canonicalFile
+        return d == r || d.path.startsWith(r.path + File.separator)
+    }
 
     /** The Gradle build root that owns the library, or the directory itself outside a build. */
     private fun projectRoot(args: JsonObject): File = start(args).let { dir ->

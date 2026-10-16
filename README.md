@@ -220,6 +220,44 @@ flowchart TB
 
 ---
 
+## UI memory: it learns as you work
+
+Every render and design Spyglass handles is remembered in `<project>/.spyglass/library/`. Each one is stored once, under a fingerprint of its pixels, with:
+- a thumbnail
+- its preview name
+- its main colours as hex codes
+- how close it came to its design
+- any name or note you give it
+
+The library updates on every render and comparison. Agents use it to work faster and spend fewer tokens:
+
+| What happens | Without the memory | With it |
+|---|---|---|
+| Re-rendering three previews that haven't changed | ~1,560 tokens (images again) | **~180 tokens** (marked `unchanged`) |
+| Repeating a comparison | ~890 tokens | **~150 tokens** (the earlier result as text) |
+| Comparing again with a design already seen | Render, design and heatmap | Render and heatmap only |
+| "Do we already have a card like this?" | Render and look through previews | `references similar`, text only |
+
+A design saved by name (`designName: "plan-card"`) can be passed as `designImage: "plan-card"` from then on. From the terminal, `spyglass refs` lists the library. Add `.spyglass/library/` to your `.gitignore` to keep it local, or commit it to share it with your team.
+
+## Visual regression checks
+
+```bash
+spyglass approve                      # store today's renders as baselines in .spyglass/baselines/
+spyglass check                        # later: compare every preview with its baseline
+```
+
+`check` reports each preview as `same`, `changed` (with its similarity, a heatmap and the regions that moved), `new` (no baseline yet) or `error`. It exits with 1 when a preview changed, or when one that used to render now fails, so it works as a CI step. Commit `.spyglass/baselines/` so CI has something to compare against.
+
+```text
+  CHANGED  CardsKt.WeatherCardPreview  98.52%  heatmap: build/spyglass/previews/CardsKt.WeatherCardPreview.check.png
+             center 110x100px at 110,130
+spyglass check: 15 same, 1 changed, 0 new, 1 errors
+spyglass check: FAILED (1)
+```
+
+---
+
 ## Install
 
 From source for now:
@@ -250,6 +288,8 @@ spyglass render                       # every module with a JVM target
 spyglass render --module :shared      # one module (inferred when run from a module folder)
 spyglass render --filter Card --json  # matching previews only, JSON on stdout
 spyglass diff render.png design.png   # compare; --fail-under 0.98 for CI
+spyglass approve / spyglass check     # baselines and visual regression checks
+spyglass refs                         # the UI memory
 spyglass help
 ```
 
@@ -257,15 +297,16 @@ Images land in `<module>/build/spyglass/previews/`. Render options: `--density` 
 
 ## Use with AI agents
 
-`spyglass mcp` is a standard MCP server on stdio, so any MCP client can use it. It has three tools:
+`spyglass mcp` is a standard MCP server on stdio, so any MCP client can use it. It has four tools:
 
 | Tool | What it does |
 |---|---|
-| `render_previews` | Renders previews (optionally `filter`ed) and returns a compact summary plus the images. |
-| `compare_with_design` | Renders one preview and compares it with a design image: score, regions in dp, and one render \| design \| heatmap image. |
+| `render_previews` | Renders previews (optionally `filter`ed) and returns a compact summary plus the images. Images the agent saw recently and that haven't changed are marked `unchanged` instead of resent (`force` resends). |
+| `compare_with_design` | Renders one preview and compares it with a design (a path, or the name of a saved design): score, regions in dp, and one render \| design \| heatmap image. |
 | `diff_images` | Compares any two images. |
+| `references` | The UI memory: `list`, `similar` and `save` are text only; `show` sends one image; `approve` stores baselines. |
 
-The server renders the project it is started in. Every tool also accepts `projectDir` and `module`, and `imageMaxPx` for image size.
+The server renders the project it is started in, and only that project: `projectDir` must point inside it unless the server is started with `--allow-any-project` (see [Security](SECURITY.md)). Every tool also accepts `module`, and `imageMaxPx` for image size.
 
 In the examples below, replace the path with where you put Spyglass. On Windows, use `cmd` as the command with `["/c", "C:\\path\\to\\spyglass\\bin\\spyglass.bat", "mcp"]` as the arguments.
 
@@ -355,13 +396,48 @@ Then run `./gradlew spyglassRender`. Options are Gradle properties: `-Pspyglass.
 | [`skills/spyglass/`](skills/spyglass) | The Claude Code skill. |
 | [`samples/desktop-sample/`](samples/desktop-sample) | A Compose Multiplatform project used for testing and for every image and score in this README and the demo video. |
 | [`samples/edge-cases/`](samples/edge-cases) | A multi-module build covering cross-module multi-previews, `@PreviewParameter`, class previews, a `kotlin("jvm")` module and a module with no JVM target. |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Continuous testing; see below. |
+
+## Usage data (opt-in)
+
+Spyglass can share anonymous usage numbers to help improve it. **It is off unless you turn it on.** The first time you run it in a terminal it asks once, with "no" as the default answer. It never asks in CI or when an agent runs it.
+
+| Shared | Never shared |
+|---|---|
+| How often commands and agent tools run | Code, images, or file and folder paths |
+| How many previews render or fail, by standard error type | Preview, module or project names |
+| Similarity scores in ranges, and how often unchanged images were skipped | Error messages, beyond their type |
+| Spyglass, Java and OS versions | Anything that identifies your machine |
+
+About once a week, the numbers are posted as a comment on the public [usage-report issue](https://github.com/zainkhalid91/spyglass/issues?q=label%3Ausage-report) using the GitHub CLI (`gh`), **under your GitHub account**. Without `gh`, nothing is sent. The numbers are used only to decide what to fix and improve in this repository.
+
+```bash
+spyglass telemetry show     # exactly what would be sent
+spyglass telemetry on|off   # off also deletes the numbers collected on this machine
+spyglass telemetry status
+```
+
+## Security
+
+Rendering runs your project's own build, so render only projects you trust. The MCP server only renders inside the project it was started in. Files in `.spyglass/` are treated as untrusted. Details, and how to report a vulnerability privately, are in [SECURITY.md](SECURITY.md).
+
+## Continuous testing and improvement
+
+- **CI** ([`ci.yml`](.github/workflows/ci.yml)): runs on every push and pull request, and on its own **every two days**. It runs:
+  - the unit tests
+  - a render of both sample projects
+  - `spyglass check` against the committed baselines
+
+  It uploads the renders and heatmaps as artifacts. If a scheduled run fails, it opens an issue labelled `ci-failure`.
+- **Scheduled improvement routine:** every two days, a Claude routine runs the tests, reads the CI results and the usage reports, looks for bugs, performance problems and token waste, and opens a pull request with fixes and tests. It never pushes to `main`; a person reviews and merges.
 
 ## Development
 
 ```bash
-./gradlew test                                   # unit tests: device specs, image diff, MCP protocol, arguments
+./gradlew test                                   # unit tests: library, check, telemetry, security, MCP protocol, diff, ...
 ./gradlew :cli:installDist                       # build the CLI
 cli/build/install/spyglass/bin/spyglass render --project samples/desktop-sample   # end to end
+cli/build/install/spyglass/bin/spyglass check --project samples/desktop-sample    # visual regression
 cli/build/install/spyglass/bin/spyglass render --project samples/edge-cases
 ```
 
